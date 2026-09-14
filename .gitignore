@@ -1,0 +1,16 @@
+/target
+**/*.rs.bk
+
+# Local state
+*.db
+*.db-wal
+*.db-shm
+/data
+
+# Env
+.env
+.env.*
+!.env.example
+
+# OS
+.DS_Store

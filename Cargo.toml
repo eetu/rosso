@@ -1,0 +1,59 @@
+[workspace]
+resolver = "2"
+members = ["backend", "integration"]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+
+[workspace.dependencies]
+axum = { version = "0.8.9", features = ["macros", "tokio", "tracing"] }
+tokio = { version = "1.53.1", features = ["full"] }
+tokio-stream = { version = "0.1.19", features = ["sync"] }
+tower-http = { version = "0.7.1", features = ["set-header", "trace"] }
+# `rustls-no-provider` rather than `rustls`: the latter pulls aws-lc-rs, which
+# wants cmake + a C toolchain and fights the xx cross-compile to arm64. ring is
+# what the other siblings already ship, so it is the proven path — install it as
+# the default provider at boot (see `run_server`).
+reqwest = { version = "0.13.5", default-features = false, features = [
+    "json",
+    "rustls-no-provider",
+    "http2",
+    "charset",
+    "stream",
+    "gzip",
+] }
+rustls = { version = "0.23.44", default-features = false, features = [
+    "ring",
+    "std",
+    "tls12",
+] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.20"
+anyhow = "1.0.104"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+chrono = { version = "0.4.45", features = ["serde"] }
+uuid = { version = "1.26.1", features = ["v4"] }
+url = "2.5.8"
+rand = "0.10.2"
+dotenvy = "0.15.7"
+mime_guess = "2.0.5"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+futures = "0.3.34"
+
+# Feed domain
+feed-rs = "2.4.0"
+quick-xml = "0.42.0"
+ammonia = "4.1.4"
+dom_smoothie = "0.18.1"
+
+# Vector search (P4 — see the cross-compile risk in the plan)
+sqlite-vec = "0.1.9"
+
+[workspace.dependencies.tempfile]
+version = "3.27.0"
+
+[workspace.dependencies.wiremock]
+version = "0.6.5"

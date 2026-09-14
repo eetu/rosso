@@ -1,0 +1,35 @@
+# Automerge Dependabot PRs using GitHub's NATIVE auto-merge, on the plain
+# GITHUB_TOKEN. No third-party action, so nothing to SHA-pin here.
+#
+# REPO SETUP: enable auto-merge on the repository, or `--auto` is rejected —
+#   gh api --method PATCH repos/<owner>/rosso -F allow_auto_merge=true
+# It is off by default, and the rejection reads like a workflow bug rather than a
+# missing setting.
+name: Automerge
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  automerge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Skip github-actions bumps: they edit .github/workflows/*, which GITHUB_TOKEN
+    # cannot merge (no `workflows` permission scope) — the run would fail and leave
+    # a red X. Merge those by hand and review the CI change.
+    if: github.actor == 'dependabot[bot]' && !startsWith(github.head_ref, 'dependabot/github_actions')
+
+    steps:
+      # GitHub merges once the REQUIRED checks pass, and required-only is the
+      # point: `main` is gated on the single `ci-gate` job while CI skips the
+      # other side by path filter, so a typical dependabot PR leaves jobs
+      # SKIPPED. Anything that waits on *all* checks waits forever on a skip.
+      - name: Enable auto-merge
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

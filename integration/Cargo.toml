@@ -1,0 +1,16 @@
+[package]
+name = "rosso-integration"
+edition.workspace = true
+version.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+reqwest.workspace = true
+rustls.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+wiremock.workspace = true

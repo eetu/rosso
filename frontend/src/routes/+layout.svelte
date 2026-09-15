@@ -31,6 +31,16 @@
 {@render children()}
 
 <style>
+  /* halo.css is tokens and primitives, not a reset, so this has to be stated.
+     Without it a declared width means the *content* box and padding is added on
+     top: the mobile sidebar is `width: 100%` with 0.75rem of padding, so it ran
+     1.5rem off the right edge. Every full-width input had the same latent bug. */
+  :global(*),
+  :global(*::before),
+  :global(*::after) {
+    box-sizing: border-box;
+  }
+
   /* The body owns the viewport and never scrolls; an inner element does. Keeps a
      phantom page scrollbar from appearing behind full-screen overlays. */
   :global(html),

@@ -35,6 +35,13 @@ impl Db {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
+        // The runtime image is `scratch`: no /tmp, no /var/tmp, nothing SQLite's
+        // unix VFS can use for a spill file. Left on the default it asks for one
+        // as soon as a statement needs to sort or merge — an item insert big
+        // enough to spill the FTS index is plenty — and fails the whole
+        // transaction with SQLITE_IOERR_GETTEMPPATH (extended code 6410). That
+        // never shows up in development, where /tmp always exists.
+        conn.pragma_update(None, "temp_store", "MEMORY")?;
         migrate(&conn)?;
         Ok(Self {
             inner: Arc::new(Mutex::new(conn)),
@@ -220,6 +227,19 @@ CREATE TABLE IF NOT EXISTS settings (
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn temp_files_are_never_asked_for() {
+        // The scratch image has nowhere to put one, so this pragma is what keeps
+        // a spilling statement from failing the transaction it is part of.
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(&dir.path().join("rosso.db")).unwrap();
+        let mode: i64 = db
+            .with(|c| c.query_row("PRAGMA temp_store", [], |r| r.get(0)))
+            .await
+            .unwrap();
+        assert_eq!(mode, 2, "temp_store is not MEMORY");
+    }
 
     #[tokio::test]
     async fn migration_is_idempotent_and_fts_tracks_items() {

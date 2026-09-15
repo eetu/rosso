@@ -7,8 +7,14 @@
 use axum::http::header;
 use reqwest::{Client, StatusCode};
 
-/// Feeds are text. 5 MB is generous for even a full-archive Atom file.
-pub const MAX_FEED_BYTES: usize = 5 * 1024 * 1024;
+/// Ceiling on a feed document.
+///
+/// 5 MB was the first guess at "generous for even a full-archive Atom file", and
+/// a real feed disproved it: danluu.com ships every post in full with no
+/// pagination and measures 6.3 MB, so it was refused outright. 16 MB admits that
+/// with headroom and is still far under the container's cap, even allowing that
+/// feed-rs builds a model several times the size of its input.
+pub const MAX_FEED_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Debug)]
 pub enum Fetched {

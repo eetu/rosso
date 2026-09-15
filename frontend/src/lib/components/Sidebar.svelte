@@ -7,6 +7,10 @@
   import AddFeed from "$lib/components/AddFeed.svelte";
   import { reader } from "$lib/stores/reader.svelte";
 
+  // On a phone the sidebar *is* the screen, so choosing something has to hand
+  // the screen back to the list. On desktop it stays put and this does nothing.
+  let { onselect = () => {} }: { onselect?: () => void } = $props();
+
   const VIEWS: { id: ItemView; label: string }[] = [
     { id: "unread", label: "unread" },
     { id: "interesting", label: "interesting" },
@@ -52,7 +56,10 @@
         class:active={reader.view === v.id &&
           reader.feedId === null &&
           reader.tag === null}
-        onclick={() => reader.select({ view: v.id, feedId: null, tag: null })}
+        onclick={() => {
+          reader.select({ view: v.id, feedId: null, tag: null });
+          onselect();
+        }}
       >
         <span>{v.label}</span>
         {#if v.id === "unread" && reader.totalUnread > 0}
@@ -73,10 +80,12 @@
           <button
             class="feed"
             class:active={reader.tag === topic.tag}
-            onclick={() =>
+            onclick={() => {
               reader.select({
                 tag: reader.tag === topic.tag ? null : topic.tag,
-              })}
+              });
+              onselect();
+            }}
           >
             <span class="name">{topic.tag}</span>
             <span class="count">{topic.unread}</span>
@@ -94,7 +103,10 @@
         <button
           class="feed"
           class:active={reader.feedId === feed.id}
-          onclick={() => reader.select({ feedId: feed.id })}
+          onclick={() => {
+            reader.select({ feedId: feed.id });
+            onselect();
+          }}
           title={feed.url}
         >
           {#if feed.last_error}
@@ -268,5 +280,28 @@
   .add {
     padding-top: 0.5rem;
     border-top: 1px solid var(--halo-border);
+  }
+
+  /* Last in the file on purpose: these override rules above at equal
+     specificity, and a media query earlier in the sheet would simply lose.
+     On a phone this is not a sidebar, it is a screen — 15rem of it beside the
+     list left about 150px for the content. */
+  @media (max-width: 800px) {
+    aside {
+      width: 100%;
+      border-right: none;
+    }
+
+    /* Touch has no hover to reveal them, so the row verbs stay out. */
+    li .actions {
+      display: flex;
+    }
+
+    /* Finger-sized rows. */
+    .view,
+    .feed {
+      padding: 0.5rem 0.4rem;
+      font-size: 0.95rem;
+    }
   }
 </style>

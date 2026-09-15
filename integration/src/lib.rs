@@ -37,9 +37,11 @@ impl Stack {
 
         // A stub dist/ so serve_spa's index.html fallback resolves.
         let static_tmp = tempfile::tempdir()?;
+        // Carries an inline script on purpose: the CSP hashes what the shell
+        // actually contains, so a shell without one would prove nothing.
         std::fs::write(
             static_tmp.path().join("index.html"),
-            "<html><body>rosso</body></html>",
+            "<html><body>rosso<script>window.__rosso = 1;</script></body></html>",
         )?;
 
         let port = free_port()?;

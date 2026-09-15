@@ -7,14 +7,14 @@
 use axum::http::header;
 use reqwest::{Client, StatusCode};
 
-/// Ceiling on a feed document.
+/// Default ceiling on a feed document, overridden by `ROSSO_MAX_FEED_MB`.
 ///
 /// 5 MB was the first guess at "generous for even a full-archive Atom file", and
 /// a real feed disproved it: danluu.com ships every post in full with no
 /// pagination and measures 6.3 MB, so it was refused outright. 16 MB admits that
 /// with headroom and is still far under the container's cap, even allowing that
 /// feed-rs builds a model several times the size of its input.
-pub const MAX_FEED_BYTES: usize = 16 * 1024 * 1024;
+pub const DEFAULT_MAX_FEED_MB: usize = 16;
 
 #[derive(Debug)]
 pub enum Fetched {
@@ -32,6 +32,7 @@ pub async fn conditional_get(
     url: &str,
     etag: Option<&str>,
     last_modified: Option<&str>,
+    max_bytes: usize,
 ) -> anyhow::Result<Fetched> {
     let mut req = http.get(url);
     if let Some(etag) = etag {
@@ -57,7 +58,7 @@ pub async fn conditional_get(
     let last_modified = header_str(header::LAST_MODIFIED);
 
     Ok(Fetched::Body {
-        bytes: read_capped(res, MAX_FEED_BYTES).await?,
+        bytes: read_capped(res, max_bytes).await?,
         etag,
         last_modified,
     })

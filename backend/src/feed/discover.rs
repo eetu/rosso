@@ -7,7 +7,7 @@
 use reqwest::Client;
 use url::Url;
 
-use super::fetch::{read_capped, MAX_FEED_BYTES};
+use super::fetch::read_capped;
 use super::parse::{self, ParsedFeed};
 
 /// A resolved feed: the URL to poll from now on, plus the first parse of it, so
@@ -17,9 +17,9 @@ pub struct Discovered {
     pub parsed: ParsedFeed,
 }
 
-pub async fn discover(http: &Client, input: &str) -> anyhow::Result<Discovered> {
+pub async fn discover(http: &Client, input: &str, max_bytes: usize) -> anyhow::Result<Discovered> {
     let start = normalize(input)?;
-    let body = get_text(http, start.as_str()).await?;
+    let body = get_text(http, start.as_str(), max_bytes).await?;
 
     if let Ok(parsed) = parse::parse(body.as_bytes(), start.as_str()) {
         return Ok(Discovered {
@@ -32,7 +32,7 @@ pub async fn discover(http: &Client, input: &str) -> anyhow::Result<Discovered> 
         let Ok(candidate) = start.join(&href) else {
             continue;
         };
-        let Ok(body) = get_text(http, candidate.as_str()).await else {
+        let Ok(body) = get_text(http, candidate.as_str(), max_bytes).await else {
             continue;
         };
         if let Ok(parsed) = parse::parse(body.as_bytes(), candidate.as_str()) {
@@ -64,9 +64,9 @@ fn normalize(input: &str) -> anyhow::Result<Url> {
     }
 }
 
-async fn get_text(http: &Client, url: &str) -> anyhow::Result<String> {
+async fn get_text(http: &Client, url: &str, max_bytes: usize) -> anyhow::Result<String> {
     let res = http.get(url).send().await?.error_for_status()?;
-    let bytes = read_capped(res, MAX_FEED_BYTES).await?;
+    let bytes = read_capped(res, max_bytes).await?;
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 

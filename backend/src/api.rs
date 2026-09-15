@@ -118,7 +118,7 @@ async fn add_feed(
     State(state): State<AppState>,
     Json(req): Json<AddFeedRequest>,
 ) -> AppResult<Json<Feed>> {
-    let found = discover::discover(&state.http, &req.url)
+    let found = discover::discover(&state.http, &req.url, state.cfg.max_feed_bytes)
         .await
         .map_err(|e| AppError::BadRequest(format!("could not find a feed: {e}")))?;
 

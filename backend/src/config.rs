@@ -38,6 +38,12 @@ pub struct Config {
     /// whose articles genuinely live on your own network — and note the
     /// integration harness sets it, because wiremock serves from 127.0.0.1.
     pub extract_allow_private: bool,
+    /// Ceiling on a feed document, in bytes. `ROSSO_MAX_FEED_MB`.
+    ///
+    /// Full-archive feeds vary by two orders of magnitude — most are well under
+    /// a megabyte, danluu.com is 6.3 — so the useful ceiling depends on what you
+    /// subscribe to and how much memory the box has.
+    pub max_feed_bytes: usize,
     /// Concurrent feed fetches per poll tick.
     pub fetch_concurrency: usize,
     /// How often the poller looks for due feeds, in seconds.
@@ -61,6 +67,13 @@ impl Config {
                 .unwrap_or_else(|| "embeddinggemma:300m".into()),
             extract_enabled: opt_env("ROSSO_EXTRACT").as_deref() != Some("0"),
             extract_allow_private: opt_env("ROSSO_EXTRACT_ALLOW_PRIVATE").as_deref() == Some("1"),
+            max_feed_bytes: num_env::<usize>(
+                "ROSSO_MAX_FEED_MB",
+                crate::feed::fetch::DEFAULT_MAX_FEED_MB,
+            )
+            .clamp(1, 256)
+                * 1024
+                * 1024,
             llm_concurrency: num_env("ROSSO_LLM_CONCURRENCY", 1).max(1),
             fetch_concurrency: num_env("ROSSO_FETCH_CONCURRENCY", 4).max(1),
             poll_tick_s: num_env("ROSSO_POLL_TICK_S", 60).max(10),
@@ -98,6 +111,25 @@ mod tests {
 
         unsafe { env::remove_var("ROSSO_OPEN") };
         unsafe { env::remove_var("ROSSO_OLLAMA_URL") };
+    }
+
+    #[test]
+    fn the_feed_ceiling_is_read_in_megabytes_and_bounded() {
+        unsafe { env::set_var("ROSSO_MAX_FEED_MB", "32") };
+        assert_eq!(Config::from_env().unwrap().max_feed_bytes, 32 * 1024 * 1024);
+
+        // A zero would refuse every feed; an absurd value would let one document
+        // take the process down. Neither is a useful thing to have configured.
+        unsafe { env::set_var("ROSSO_MAX_FEED_MB", "0") };
+        assert_eq!(Config::from_env().unwrap().max_feed_bytes, 1024 * 1024);
+        unsafe { env::set_var("ROSSO_MAX_FEED_MB", "99999") };
+        assert_eq!(
+            Config::from_env().unwrap().max_feed_bytes,
+            256 * 1024 * 1024
+        );
+
+        unsafe { env::remove_var("ROSSO_MAX_FEED_MB") };
+        assert_eq!(Config::from_env().unwrap().max_feed_bytes, 16 * 1024 * 1024);
     }
 
     #[test]

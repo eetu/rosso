@@ -10,6 +10,7 @@ import {
   type ItemView,
   type Settings,
   type SettingsResponse,
+  type Topic,
 } from "$lib/api";
 
 let feeds = $state<Feed[]>([]);
@@ -20,9 +21,11 @@ let open = $state<ItemDetail | null>(null);
 let opening = $state<number | null>(null);
 let view = $state<ItemView>("unread");
 let feedId = $state<number | null>(null);
+let tag = $state<string | null>(null);
 let loadingItems = $state(false);
 let error = $state<string | null>(null);
 let settings = $state<SettingsResponse | null>(null);
+let topics = $state<Topic[]>([]);
 
 function message(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -39,7 +42,11 @@ async function loadFeeds() {
 async function loadItems() {
   loadingItems = true;
   try {
-    const page = await api.items({ view, feed_id: feedId ?? undefined });
+    const page = await api.items({
+      view,
+      feed_id: feedId ?? undefined,
+      tag: tag ?? undefined,
+    });
     items = page.items;
     error = null;
   } catch (e) {
@@ -47,6 +54,23 @@ async function loadItems() {
   } finally {
     loadingItems = false;
   }
+}
+
+async function loadTopics() {
+  try {
+    topics = await api.topics();
+  } catch (e) {
+    error = message(e);
+  }
+}
+
+/**
+ * Feed counts and topic counts are both counts of unread items, so whatever
+ * moves one moves the other — reloading them together keeps the sidebar from
+ * showing two numbers that disagree.
+ */
+async function refreshCounts() {
+  await Promise.all([loadFeeds(), loadTopics()]);
 }
 
 export const reader = {
@@ -68,6 +92,12 @@ export const reader = {
   get feedId() {
     return feedId;
   },
+  get tag() {
+    return tag;
+  },
+  get topics() {
+    return topics;
+  },
   get loadingItems() {
     return loadingItems;
   },
@@ -82,7 +112,7 @@ export const reader = {
   },
 
   async init() {
-    await Promise.all([loadFeeds(), loadItems(), this.loadSettings()]);
+    await Promise.all([refreshCounts(), loadItems(), this.loadSettings()]);
   },
 
   async loadSettings() {
@@ -103,9 +133,25 @@ export const reader = {
     await Promise.all([this.loadSettings(), loadItems()]);
   },
 
-  async select(next: { view?: ItemView; feedId?: number | null }) {
+  /**
+   * A feed and a topic are alternative ways to narrow the same list, so
+   * choosing one clears the other — holding both would leave a selection the
+   * sidebar shows in two places at once.
+   */
+  async select(next: {
+    view?: ItemView;
+    feedId?: number | null;
+    tag?: string | null;
+  }) {
     if (next.view !== undefined) view = next.view;
-    if (next.feedId !== undefined) feedId = next.feedId;
+    if (next.feedId !== undefined) {
+      feedId = next.feedId;
+      if (next.feedId !== null) tag = null;
+    }
+    if (next.tag !== undefined) {
+      tag = next.tag;
+      if (next.tag !== null) feedId = null;
+    }
     open = null;
     await loadItems();
   },
@@ -113,19 +159,19 @@ export const reader = {
   /** Throws so the form can show the failure inline; everything else swallows. */
   async addFeed(url: string) {
     const feed = await api.addFeed(url);
-    await Promise.all([loadFeeds(), loadItems()]);
+    await Promise.all([refreshCounts(), loadItems()]);
     return feed;
   },
 
   async removeFeed(id: number) {
     await api.deleteFeed(id);
     if (feedId === id) feedId = null;
-    await Promise.all([loadFeeds(), loadItems()]);
+    await Promise.all([refreshCounts(), loadItems()]);
   },
 
   async refreshFeed(id: number) {
     await api.refreshFeed(id);
-    await Promise.all([loadFeeds(), loadItems()]);
+    await Promise.all([refreshCounts(), loadItems()]);
   },
 
   /** Opening an item marks it read, which is what every reader does. */
@@ -155,7 +201,7 @@ export const reader = {
     const updated = await api.updateItem(id, { read });
     patchLocal(updated);
     // The unread counts live on the feed rows, so they need a reload to match.
-    await loadFeeds();
+    await refreshCounts();
   },
 
   async setStarred(id: number, starred: boolean) {
@@ -174,7 +220,7 @@ export const reader = {
 
   async markAllRead() {
     await api.markRead(feedId ?? undefined);
-    await Promise.all([loadFeeds(), loadItems()]);
+    await Promise.all([refreshCounts(), loadItems()]);
   },
 };
 

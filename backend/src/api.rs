@@ -12,7 +12,7 @@ use crate::extract;
 use crate::feed::{self, discover};
 use crate::llm;
 use crate::settings::{self, Settings, SettingsPatch};
-use crate::store::{self, Feed, FeedPatch, Item, ItemDetail, ItemPatch, ItemQuery};
+use crate::store::{self, Feed, FeedPatch, Item, ItemDetail, ItemPatch, ItemQuery, Topic};
 use crate::AppState;
 
 pub fn routes() -> Router<AppState> {
@@ -24,6 +24,19 @@ pub fn routes() -> Router<AppState> {
         .route("/api/items/{id}", get(get_item).patch(update_item))
         .route("/api/items/mark-read", post(mark_read))
         .route("/api/settings", get(get_settings).put(put_settings))
+        .route("/api/topics", get(list_topics))
+}
+
+#[derive(Serialize)]
+struct TopicsResponse {
+    topics: Vec<Topic>,
+}
+
+/// Topics worth grouping by, from the tags the model already assigns.
+async fn list_topics(_: Auth, State(state): State<AppState>) -> AppResult<Json<TopicsResponse>> {
+    Ok(Json(TopicsResponse {
+        topics: store::list_topics(&state.db).await?,
+    }))
 }
 
 #[derive(Serialize)]

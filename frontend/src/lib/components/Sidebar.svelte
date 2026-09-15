@@ -49,8 +49,10 @@
     {#each views as v (v.id)}
       <button
         class="view"
-        class:active={reader.view === v.id && reader.feedId === null}
-        onclick={() => reader.select({ view: v.id, feedId: null })}
+        class:active={reader.view === v.id &&
+          reader.feedId === null &&
+          reader.tag === null}
+        onclick={() => reader.select({ view: v.id, feedId: null, tag: null })}
       >
         <span>{v.label}</span>
         {#if v.id === "unread" && reader.totalUnread > 0}
@@ -59,6 +61,30 @@
       </button>
     {/each}
   </nav>
+
+  <!-- Topics are the tags the model already assigns, kept only where enough
+       items share one. Absent until the model has been round, which is the
+       honest state rather than an empty heading. -->
+  {#if reader.topics.length > 0}
+    <h2>topics</h2>
+    <ul class="topics">
+      {#each reader.topics as topic (topic.tag)}
+        <li>
+          <button
+            class="feed"
+            class:active={reader.tag === topic.tag}
+            onclick={() =>
+              reader.select({
+                tag: reader.tag === topic.tag ? null : topic.tag,
+              })}
+          >
+            <span class="name">{topic.tag}</span>
+            <span class="count">{topic.unread}</span>
+          </button>
+        </li>
+      {/each}
+    </ul>
+  {/if}
 
   <h2>feeds</h2>
 
@@ -139,6 +165,13 @@
     margin: 0;
     padding: 0;
     list-style: none;
+  }
+
+  /* Topics are a short, capped list — the feed list is the one that grows and
+     earns the remaining height. */
+  .topics {
+    flex: none;
+    overflow: visible;
   }
 
   li {

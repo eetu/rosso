@@ -233,6 +233,39 @@ async fn editing_the_profile_rescores_what_was_already_summarized() {
 
 #[tokio::test]
 #[ignore = "spawns the backend binary"]
+async fn tags_become_topics_once_enough_items_share_one() {
+    let ollama = fake_ollama(chat_reply(json!({
+        "summary": "s", "score": 70, "reason": "r", "tags": ["Rust", " rust ", "sqlite"]
+    })))
+    .await;
+    let feeds = feed_server().await;
+
+    let stack = Stack::start_with_env(&[("ROSSO_OLLAMA_URL", &ollama.uri())])
+        .await
+        .unwrap();
+    stack
+        .post_json("/api/feeds", json!({ "url": feeds.uri() + "/feed.xml" }))
+        .await;
+
+    let body = wait_for(&stack, "/api/items", |b| {
+        b["items"][0]["tags"]
+            .as_array()
+            .is_some_and(|t| !t.is_empty())
+    })
+    .await;
+    // Casing and spacing are settled before storage, so one item cannot become
+    // two topics on its own.
+    assert_eq!(body["items"][0]["tags"], json!(["rust", "sqlite"]));
+
+    // One item is below the floor, so nothing is a topic yet.
+    assert!(stack.get_json("/api/topics").await["topics"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+#[ignore = "spawns the backend binary"]
 async fn an_unreachable_model_host_leaves_the_reader_whole() {
     let feeds = feed_server().await;
     let dead = format!(

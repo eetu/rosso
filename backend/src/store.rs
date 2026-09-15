@@ -54,6 +54,8 @@ pub struct Item {
     pub score: Option<i64>,
     /// Why the model gave that score — shown on hover, not in the row.
     pub score_reason: Option<String>,
+    /// Topic tags the model assigned. Empty when it has not been enriched.
+    pub tags: Vec<String>,
     pub read: bool,
     pub starred: bool,
     /// -1, 0 or 1.
@@ -89,6 +91,8 @@ pub struct ItemQuery {
     /// Score cutoff for the `interesting` view; comes from settings.
     #[serde(skip)]
     pub score_threshold: i64,
+    /// Narrow to one topic tag.
+    pub tag: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -403,7 +407,7 @@ fn insert_items_tx(
 const ITEM_COLUMNS: &str = "i.id, i.feed_id, \
      COALESCE(NULLIF(f.custom_title, ''), NULLIF(f.title, ''), f.url) AS feed_title, \
      i.url, i.comments_url, i.title, i.author, i.published_at, i.summary, i.score, \
-     i.score_reason, i.read_at, i.starred_at, i.feedback";
+     i.score_reason, i.tags_json, i.read_at, i.starred_at, i.feedback";
 
 fn item_from_row(row: &Row) -> rusqlite::Result<Item> {
     Ok(Item {
@@ -418,6 +422,12 @@ fn item_from_row(row: &Row) -> rusqlite::Result<Item> {
         summary: row.get("summary")?,
         score: row.get("score")?,
         score_reason: row.get("score_reason")?,
+        // Stored as a JSON array; a row written before tags existed, or by a
+        // model that answered without them, reads as none rather than an error.
+        tags: row
+            .get::<_, Option<String>>("tags_json")?
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .unwrap_or_default(),
         read: row.get::<_, Option<String>>("read_at")?.is_some(),
         starred: row.get::<_, Option<String>>("starred_at")?.is_some(),
         feedback: row.get("feedback")?,
@@ -448,6 +458,11 @@ pub async fn list_items(db: &Db, query: ItemQuery) -> rusqlite::Result<Vec<Item>
         // encodes the *time* ordering, so it cannot page a score-ordered view —
         // the interesting view is a shortlist by construction and returns one
         // page with no cursor rather than paging by the wrong key.
+        let tag_clause = if query.tag.is_some() {
+            "AND EXISTS (SELECT 1 FROM json_each(i.tags_json) WHERE json_each.value = :tag)"
+        } else {
+            ""
+        };
         let paged = supports_cursor(query.view.as_deref());
         let (cursor_ts, cursor_id) = if paged {
             split_cursor(query.cursor.as_deref())
@@ -466,6 +481,7 @@ pub async fn list_items(db: &Db, query: ItemQuery) -> rusqlite::Result<Vec<Item>
              FROM items i JOIN feeds f ON f.id = i.feed_id
              WHERE {view_clause}
                AND (:feed_id IS NULL OR i.feed_id = :feed_id)
+               {tag_clause}
                {cursor_clause}
              ORDER BY {order}
              LIMIT :limit"
@@ -483,6 +499,9 @@ pub async fn list_items(db: &Db, query: ItemQuery) -> rusqlite::Result<Vec<Item>
         }
         if view_clause.contains(":threshold") {
             binds.push((":threshold", &query.score_threshold));
+        }
+        if query.tag.is_some() {
+            binds.push((":tag", &query.tag));
         }
 
         let mut stmt = c.prepare(&sql)?;
@@ -641,6 +660,52 @@ pub async fn record_extraction_failure(db: &Db, id: i64, error: String) -> rusql
             params![id, error],
         )?;
         Ok(())
+    })
+    .await
+}
+
+// -------------------------------------------------------------------- topics
+
+#[derive(Debug, Serialize)]
+pub struct Topic {
+    pub tag: String,
+    pub unread: i64,
+}
+
+/// A tag has to appear this many times before it is a topic.
+///
+/// The tags are free text from the model, so near-duplicates are inevitable —
+/// `rust`, `rustlang`, `rust-lang`. A floor is most of the cure without a
+/// controlled vocabulary: a one-off variant never reaches it, while a term the
+/// corpus really is about does so quickly.
+pub const MIN_TOPIC_COUNT: i64 = 3;
+
+/// How many topics the sidebar will show.
+const MAX_TOPICS: u32 = 12;
+
+/// Topics across unread items, most waiting first.
+///
+/// Counts are of *unread* items so the number means the same thing as the one
+/// beside each feed — how much is waiting — and drains the same way as it is
+/// read.
+pub async fn list_topics(db: &Db) -> rusqlite::Result<Vec<Topic>> {
+    db.with(|c| {
+        let mut stmt = c.prepare(
+            "SELECT json_each.value AS tag, count(*) AS unread
+             FROM items i, json_each(i.tags_json)
+             WHERE i.read_at IS NULL AND i.tags_json IS NOT NULL
+             GROUP BY tag
+             HAVING unread >= ?1
+             ORDER BY unread DESC, tag
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![MIN_TOPIC_COUNT, MAX_TOPICS], |r| {
+            Ok(Topic {
+                tag: r.get("tag")?,
+                unread: r.get("unread")?,
+            })
+        })?;
+        rows.collect()
     })
     .await
 }

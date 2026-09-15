@@ -65,6 +65,14 @@
 
   <h1>{item.title || "(untitled)"}</h1>
 
+  {#if item.tags.length > 0}
+    <p class="tags">
+      {#each item.tags as tag (tag)}
+        <button onclick={() => reader.select({ tag })}>{tag}</button>
+      {/each}
+    </p>
+  {/if}
+
   {#if item.summary}
     <div class="summary">
       <p>{item.summary}</p>
@@ -176,6 +184,30 @@
     font-size: 1.35rem;
     font-weight: 600;
     line-height: 1.25;
+  }
+
+  .tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    margin: 0 0 0.75rem;
+  }
+
+  .tags button {
+    padding: 0.1rem 0.4rem;
+    border: 1px solid var(--halo-border);
+    border-radius: var(--halo-radius);
+    background: none;
+    color: var(--halo-text-muted);
+    font: inherit;
+    font-family: var(--halo-font-heading);
+    font-size: 0.7rem;
+    cursor: pointer;
+  }
+
+  .tags button:hover {
+    color: var(--halo-accent);
+    border-color: var(--halo-accent);
   }
 
   .summary {

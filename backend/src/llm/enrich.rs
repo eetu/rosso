@@ -248,11 +248,28 @@ async fn rescore_pass(
     Ok(())
 }
 
+/// Normalize and serialize the model's tags.
+///
+/// The prompt asks for lowercase, which a model mostly honours and sometimes
+/// does not. Since tags are grouped on by exact string match, `Rust` and `rust`
+/// would otherwise be two topics — so casing and spacing are settled here rather
+/// than trusted, and the per-item list is deduped and capped.
 fn tags_json(tags: &[String]) -> Option<String> {
-    if tags.is_empty() {
+    let mut clean: Vec<String> = Vec::new();
+    for tag in tags {
+        let normalized = tag.trim().to_lowercase();
+        if normalized.is_empty() || normalized.chars().count() > 32 {
+            continue;
+        }
+        if !clean.contains(&normalized) {
+            clean.push(normalized);
+        }
+    }
+    clean.truncate(4);
+    if clean.is_empty() {
         return None;
     }
-    serde_json::to_string(tags).ok()
+    serde_json::to_string(&clean).ok()
 }
 
 /// Shared permit pool, so every caller queues behind the same one generation.
@@ -267,10 +284,30 @@ mod tests {
     #[test]
     fn tags_are_stored_as_json_or_not_at_all() {
         assert_eq!(tags_json(&[]), None);
+        assert_eq!(tags_json(&["  ".into()]), None);
         assert_eq!(
             tags_json(&["rust".into(), "sqlite".into()]).as_deref(),
             Some(r#"["rust","sqlite"]"#)
         );
+    }
+
+    #[test]
+    fn casing_and_duplicates_are_settled_before_storage() {
+        // Grouping is an exact string match, so `Rust` and `rust` reaching the
+        // table would show up as two separate topics.
+        assert_eq!(
+            tags_json(&["Rust".into(), " rust ".into(), "SQLite".into()]).as_deref(),
+            Some(r#"["rust","sqlite"]"#)
+        );
+    }
+
+    #[test]
+    fn a_runaway_tag_list_is_capped() {
+        let many: Vec<String> = (0..20).map(|n| format!("tag{n}")).collect();
+        let stored = tags_json(&many).unwrap();
+        assert_eq!(stored.matches("tag").count(), 4);
+        // A sentence answered into the tags field is not a topic.
+        assert_eq!(tags_json(&["x".repeat(80)]), None);
     }
 
     #[test]

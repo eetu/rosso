@@ -42,6 +42,8 @@ export type Item = {
   summary: string | null;
   score: number | null;
   score_reason: string | null;
+  /** Topic tags from the model. Empty until the item has been enriched. */
+  tags: string[];
   read: boolean;
   starred: boolean;
   /** -1, 0 or 1. Steers future scoring. */
@@ -68,8 +70,15 @@ export type ItemView = "unread" | "starred" | "interesting" | "all";
 export type ItemsQuery = {
   view?: ItemView;
   feed_id?: number;
+  tag?: string;
   cursor?: string;
   limit?: number;
+};
+
+/** A tag seen often enough to be worth grouping by, with its unread count. */
+export type Topic = {
+  tag: string;
+  unread: number;
 };
 
 /** Thrown for any non-2xx response; carries the HTTP status. */
@@ -149,6 +158,8 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(patch),
     }),
+  topics: () =>
+    request<{ topics: Topic[] }>("/api/topics").then((r) => r.topics),
   settings: () => request<SettingsResponse>("/api/settings"),
   saveSettings: (patch: Partial<Settings>) =>
     request<Settings>("/api/settings", {

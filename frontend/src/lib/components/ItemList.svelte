@@ -86,6 +86,15 @@
     text-align: left;
   }
 
+  /* The button stays full width so the whole row is clickable, but its contents
+     stop at a reading measure — the same one the reader pane uses. Left to
+     stretch, `.age`'s margin-left:auto flings the timestamp to the far edge of a
+     wide window and leaves a dead band between it and the title. */
+  .row > * {
+    width: 100%;
+    max-width: 42rem;
+  }
+
   .row:hover {
     background: var(--halo-bg-light);
   }

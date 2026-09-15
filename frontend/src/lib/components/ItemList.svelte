@@ -86,15 +86,6 @@
     text-align: left;
   }
 
-  /* The button stays full width so the whole row is clickable, but its contents
-     stop at a reading measure — the same one the reader pane uses. Left to
-     stretch, `.age`'s margin-left:auto flings the timestamp to the far edge of a
-     wide window and leaves a dead band between it and the title. */
-  .row > * {
-    width: 100%;
-    max-width: 42rem;
-  }
-
   .row:hover {
     background: var(--halo-bg-light);
   }
@@ -117,15 +108,26 @@
     color: var(--halo-text-muted);
   }
 
+  /* Shrinks and ellipsises so a long publication name never pushes the age out
+     of sight. */
   .feed {
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
+  /* Sits next to the feed name rather than being pushed to the far edge by a
+     margin-left:auto. Right-aligning it means the gap grows with the window,
+     which on a wide list is a band of nothing across every row — and capping the
+     row's width to hide that only moved the gap somewhere else. */
   .age {
     flex: none;
-    margin-left: auto;
+  }
+
+  .age::before {
+    content: "·";
+    margin-right: 0.4rem;
   }
 
   .title {

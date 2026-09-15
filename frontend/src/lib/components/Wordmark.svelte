@@ -6,7 +6,11 @@
      wrapper with a `gap` looks equivalent but is not: the gap falls between
      every flex child, so it lands between the name and its accent dot too and
      the mark reads `rosso .` — the one place in the wordmark where spacing is
-     not a free choice. -->
+     not a free choice.
+
+     The riff ends in a non-breaking space because Svelte trims whitespace at an
+     element boundary, and an ordinary trailing space there is simply dropped:
+     `ilrosso.` -->
 <span class="halo-wordmark wordmark">
   <svg class="glyph" viewBox="0 0 64 64" fill="none" aria-hidden="true">
     <path
@@ -22,7 +26,7 @@
       stroke-linecap="round"
     />
     <circle cx="18" cy="46" r="5" fill="#f78f08" />
-  </svg><span class="riff">il buono, il brutto, il </span>rosso<span
+  </svg><span class="riff">il buono, il brutto, il&nbsp;</span>rosso<span
     class="accent">.</span
   >
 </span>

@@ -290,6 +290,19 @@
     aside {
       width: 100%;
       border-right: none;
+      /* The pane scrolls as one. On desktop only the feed list scrolls, which
+         works because everything above it is short — but here the views, the
+         topics and the add form together can already fill the screen, leaving
+         the feed list (the one scrolling region) squeezed to nothing and the
+         feeds unreachable. */
+      overflow-y: auto;
+      padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));
+    }
+
+    /* So the inner lists stop being scroll containers of their own. */
+    ul {
+      flex: none;
+      overflow: visible;
     }
 
     /* Touch has no hover to reveal them, so the row verbs stay out. */

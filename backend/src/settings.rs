@@ -16,6 +16,12 @@ pub const SCORE_THRESHOLD: &str = "score_threshold";
 pub const LLM_MODEL: &str = "llm_model";
 pub const DEDUPE_THRESHOLD: &str = "dedupe_threshold";
 pub const DIGEST_HOUR: &str = "digest_hour";
+pub const RETENTION_DAYS: &str = "retention_days";
+
+/// How long a read item is kept. `0` keeps everything, which is the default —
+/// deleting a reader's archive is not something to start doing to someone who
+/// never asked for it.
+pub const DEFAULT_RETENTION_DAYS: i64 = 0;
 
 /// The UTC hour at which yesterday's digest appears.
 ///
@@ -48,6 +54,7 @@ pub struct Settings {
     pub llm_model: String,
     pub dedupe_threshold: f32,
     pub digest_hour: i64,
+    pub retention_days: i64,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -57,6 +64,7 @@ pub struct SettingsPatch {
     pub llm_model: Option<String>,
     pub dedupe_threshold: Option<f32>,
     pub digest_hour: Option<i64>,
+    pub retention_days: Option<i64>,
 }
 
 impl Settings {
@@ -103,6 +111,9 @@ pub async fn load(db: &Db, cfg: &Config) -> rusqlite::Result<Settings> {
             digest_hour: get(DIGEST_HOUR)?
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(DEFAULT_DIGEST_HOUR),
+            retention_days: get(RETENTION_DAYS)?
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(DEFAULT_RETENTION_DAYS),
         })
     })
     .await
@@ -133,6 +144,13 @@ pub async fn save(db: &Db, patch: SettingsPatch) -> rusqlite::Result<()> {
         if let Some(hour) = patch.digest_hour {
             put.execute((DIGEST_HOUR, hour.clamp(0, 23).to_string()))?;
         }
+        if let Some(days) = patch.retention_days {
+            // Floored at a week when on at all: a one-day retention would
+            // delete this morning's reading before the evening, and nothing
+            // in the UI would explain where it went.
+            let days = if days <= 0 { 0 } else { days.max(7) };
+            put.execute((RETENTION_DAYS, days.to_string()))?;
+        }
         Ok(())
     })
     .await
@@ -149,6 +167,7 @@ mod tests {
             llm_model: "m".into(),
             dedupe_threshold: DEFAULT_DEDUPE_THRESHOLD,
             digest_hour: DEFAULT_DIGEST_HOUR,
+            retention_days: DEFAULT_RETENTION_DAYS,
         }
     }
 

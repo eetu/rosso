@@ -104,6 +104,45 @@ fn feed_links(html: &str) -> Vec<String> {
     out
 }
 
+/// Hrefs of the `<link>` tags that point at a site icon, best first.
+///
+/// `apple-touch-icon` leads because it is the one a site is obliged to ship as a
+/// real square bitmap; `icon` is often a multi-resolution `.ico`, which no image
+/// decoder in this process reads, and `shortcut icon` is the ancient spelling of
+/// the same thing. `/favicon.ico` is not listed — it is the caller's fallback
+/// when a page declares nothing, not something the page said.
+pub fn icon_links(html: &str) -> Vec<String> {
+    let lower = html.to_ascii_lowercase();
+    let mut found: Vec<(usize, String)> = Vec::new();
+    let mut cursor = 0usize;
+
+    while let Some(at) = lower[cursor..].find("<link") {
+        let start = cursor + at;
+        let Some(end_rel) = lower[start..].find('>') else {
+            break;
+        };
+        let end = start + end_rel;
+        let rel = attr(&lower[start..end], "rel").unwrap_or_default();
+        // Rank rather than filter, so the order is by usefulness and not by
+        // where the publisher happened to put the tag.
+        let rank = if rel.contains("apple-touch-icon") {
+            Some(0)
+        } else if rel.split_whitespace().any(|r| r == "icon") {
+            Some(1)
+        } else if rel.contains("shortcut") {
+            Some(2)
+        } else {
+            None
+        };
+        if let (Some(rank), Some(href)) = (rank, attr_raw(&html[start..end], "href")) {
+            found.push((rank, href));
+        }
+        cursor = end + 1;
+    }
+    found.sort_by_key(|(rank, _)| *rank);
+    found.into_iter().map(|(_, href)| href).collect()
+}
+
 fn attr(tag_lower: &str, name: &str) -> Option<String> {
     attr_raw(tag_lower, name)
 }

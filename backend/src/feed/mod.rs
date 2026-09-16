@@ -1,5 +1,6 @@
 pub mod comments;
 pub mod discover;
+pub mod favicon;
 pub mod fetch;
 pub mod opml;
 pub mod parse;

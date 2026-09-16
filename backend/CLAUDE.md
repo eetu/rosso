@@ -19,9 +19,10 @@ util.rs       fnv1a — persisted hashes, so never DefaultHasher
 routes.rs     router, /status, SPA fallback handler, CSP layer
 auth.rs       forward-auth extractor (+ the dev_auth bypass)
 error.rs      AppError → IntoResponse
+retention.rs  prunes read items once a retention window is set
 feed/         fetch (conditional GET + size cap), parse (feed-rs + sanitize),
               discover (url → feed url), schedule (adaptive interval), poller,
-              opml (import/export)
+              opml (import/export), favicon (site icons, inlined)
 shutdown.rs   bounded graceful drain
 ```
 
@@ -72,6 +73,19 @@ shutdown.rs   bounded graceful drain
   list, the feed counts and the topic counts filter to one row per story with a
   column comparison rather than a correlated subquery per row — and why all three
   must carry the same clause or the sidebar will count rows the list never shows.
+- **A favicon is stored, never linked.** `feeds.icon` holds a `data:` URI the
+  backend fetched once. An `<img>` pointing at the publisher's host would
+  announce the reader to twenty sites on every page load, from whatever network
+  it was opened on — which is most of what a self-hosted reader exists to avoid.
+- **`sanitize` promotes lazy image sources before ammonia runs.** ammonia keeps
+  only `align alt height src width` on an `img`, so `data-src` is stripped and a
+  one-pixel placeholder is all that survives — the article renders with blanks
+  where its pictures were, which looks exactly like a publisher who shipped
+  none. The promotion has to happen *before* sanitizing; afterwards there is
+  nothing left to promote.
+- **Retention is off by default and never deletes three things**: starred,
+  unread, and anything a digest refers to. The first two are the reader saying it
+  still matters; the third is what keeps a digest from becoming dead links.
 - **Days are UTC, and the digest hour says so.** The runtime image is `scratch`
   and carries no tzdata, so `chrono::Local` resolves to UTC whatever `TZ` is set
   to. A "local hour" setting that quietly is not one is worse than an honest UTC

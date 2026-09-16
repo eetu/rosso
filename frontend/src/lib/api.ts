@@ -26,6 +26,8 @@ export type Feed = {
   next_fetch_at: string;
   last_error: string | null;
   disabled: boolean;
+  /** Whether the model reads this feed. Off leaves its items plain. */
+  llm_enabled: boolean;
 };
 
 export type Item = {
@@ -70,6 +72,8 @@ export type Settings = {
   /** UTC hour at which yesterday's digest appears. UTC because the runtime
    * image is `scratch` and carries no tzdata — see `llm/digest.rs`. */
   digest_hour: number;
+  /** Days a read item is kept. 0 keeps everything, and is the default. */
+  retention_days: number;
 };
 
 export type SettingsResponse = Settings & {
@@ -194,6 +198,11 @@ export const api = {
     request<Feed>("/api/feeds", {
       method: "POST",
       body: JSON.stringify({ url }),
+    }),
+  updateFeed: (id: number, patch: { llm_enabled?: boolean }) =>
+    request<Feed>(`/api/feeds/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
     }),
   deleteFeed: (id: number) =>
     request<unknown>(`/api/feeds/${id}`, { method: "DELETE" }),

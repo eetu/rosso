@@ -175,6 +175,7 @@ mod tests {
             next_fetch_at: "2026-09-16T00:00:00Z".into(),
             last_error: None,
             disabled: false,
+            llm_enabled: true,
         }];
         let round_tripped = parse(&render(&feeds, "2026-09-16T00:00:00Z"));
         assert_eq!(

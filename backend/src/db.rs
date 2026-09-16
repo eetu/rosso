@@ -86,6 +86,10 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
         "INTEGER NOT NULL DEFAULT 0",
     )?;
     add_column_if_missing(conn, "items", "embed_error", "TEXT")?;
+    // Per-feed LLM opt-out. Defaults on, so an existing database keeps behaving
+    // the way it did before the column existed.
+    add_column_if_missing(conn, "feeds", "llm_enabled", "INTEGER NOT NULL DEFAULT 1")?;
+    add_column_if_missing(conn, "feeds", "icon_attempts", "INTEGER NOT NULL DEFAULT 0")?;
 
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     Ok(())
@@ -137,7 +141,11 @@ CREATE TABLE IF NOT EXISTS feeds (
     title         TEXT NOT NULL DEFAULT '',
     custom_title  TEXT,
     folder_id     INTEGER REFERENCES folders(id) ON DELETE SET NULL,
+    -- A `data:` URI, not a link. Linking to the publisher's own favicon would
+    -- announce the reader to every site in the list on every page load, from
+    -- whatever network it is opened on.
     icon          TEXT,
+    icon_attempts INTEGER NOT NULL DEFAULT 0,
 
     etag          TEXT,
     last_modified TEXT,
@@ -147,6 +155,10 @@ CREATE TABLE IF NOT EXISTS feeds (
     failures      INTEGER NOT NULL DEFAULT 0,
     last_error    TEXT,
     disabled      INTEGER NOT NULL DEFAULT 0,
+    -- Whether the model reads this feed at all. Off for the ones whose titles
+    -- already say everything — a summary of a release-notes entry costs a
+    -- generation to restate the headline.
+    llm_enabled   INTEGER NOT NULL DEFAULT 1,
     created_at    TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_feeds_due ON feeds(next_fetch_at) WHERE disabled = 0;

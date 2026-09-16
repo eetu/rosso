@@ -12,6 +12,7 @@ pub mod events;
 pub mod extract;
 pub mod feed;
 pub mod llm;
+pub mod retention;
 pub mod routes;
 pub mod settings;
 pub mod shutdown;
@@ -91,6 +92,8 @@ pub async fn run_server() -> anyhow::Result<()> {
     llm::enrich::spawn(state.clone());
     llm::embed::spawn(state.clone());
     llm::digest::spawn(state.clone());
+    retention::spawn(state.clone());
+    feed::favicon::spawn(state.clone());
 
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     tracing::info!(%bind, "rosso listening");

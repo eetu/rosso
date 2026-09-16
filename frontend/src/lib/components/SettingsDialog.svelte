@@ -11,6 +11,7 @@
   let threshold = $state(65);
   let dedupe = $state(0.9);
   let digestHour = $state(6);
+  let retention = $state(0);
   let model = $state("");
   let saving = $state(false);
   let saved = $state(false);
@@ -25,6 +26,7 @@
       threshold = settings.score_threshold;
       dedupe = settings.dedupe_threshold;
       digestHour = settings.digest_hour;
+      retention = settings.retention_days;
       model = settings.llm_model;
       seeded = true;
     }
@@ -61,6 +63,7 @@
         score_threshold: threshold,
         dedupe_threshold: dedupe,
         digest_hour: digestHour,
+        retention_days: retention,
         llm_model: model,
       });
       saved = true;
@@ -160,6 +163,22 @@
          would quietly be this one anyway. Better said out loud. -->
     <span class="grow note">
       <span class="hint">:00 utc, covering the day before.</span>
+    </span>
+  </div>
+
+  <div class="row">
+    <span>
+      <label for="retention">keep read for</label>
+      <input id="retention" type="number" bind:value={retention} min="0" />
+    </span>
+    <span class="grow note">
+      <span class="hint">
+        {#if retention <= 0}
+          days. 0 keeps everything, which is the default.
+        {:else}
+          days. starred and unread are never deleted.
+        {/if}
+      </span>
     </span>
   </div>
 

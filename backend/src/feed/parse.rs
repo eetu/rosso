@@ -319,7 +319,108 @@ pub fn sanitize(html: &str, base: Option<&Url>) -> String {
     if let Some(b) = base {
         builder.url_relative(UrlRelative::RewriteWithBase(b.clone()));
     }
-    drop_empty_elements(&builder.clean(html).to_string())
+    drop_empty_elements(&builder.clean(&unlazy(html)).to_string())
+}
+
+/// Attributes a lazy-loading script would have read, most specific first.
+///
+/// One per CMS and plugin, and a page usually carries exactly one of them. The
+/// order matters only where a page carries two, in which case the plainer name
+/// is the one the script would have used.
+const LAZY_SRC: &[&str] = &["data-src", "data-lazy-src", "data-original", "data-echo"];
+
+/// Give a lazily-loaded image the src it was going to get.
+///
+/// Half the web ships `<img src="data:image/gif;base64,…1px…" data-src="real.jpg">`
+/// and a script that swaps them on scroll. rosso runs no scripts, and ammonia
+/// keeps only `align alt height src width` on an `img` — so the data attribute is
+/// stripped and what survives is a one-pixel placeholder. The article renders
+/// with blanks where its pictures were, which looks exactly like a publisher who
+/// shipped no images.
+///
+/// Textual rather than a DOM pass: the sanitizer is the thing that parses HTML
+/// here, and running a second parser over untrusted markup to save a string
+/// replace is a worse trade. A miss leaves the placeholder, which is the status
+/// quo.
+fn unlazy(html: &str) -> String {
+    if !LAZY_SRC.iter().any(|a| html.contains(a)) {
+        return html.to_string();
+    }
+    let mut out = String::with_capacity(html.len());
+    let mut cursor = 0usize;
+    let lower = html.to_ascii_lowercase();
+
+    while let Some(found) = lower[cursor..].find("<img") {
+        let start = cursor + found;
+        let Some(end_rel) = lower[start..].find('>') else {
+            break;
+        };
+        let end = start + end_rel + 1;
+        out.push_str(&html[cursor..start]);
+        out.push_str(&promote_src(&html[start..end]));
+        cursor = end;
+    }
+    out.push_str(&html[cursor..]);
+    out
+}
+
+/// Rewrite one `<img …>` tag so its real source is in `src`.
+fn promote_src(tag: &str) -> String {
+    let lower = tag.to_ascii_lowercase();
+    let Some(real) = LAZY_SRC
+        .iter()
+        .find_map(|name| attribute_value(tag, &lower, name))
+    else {
+        return tag.to_string();
+    };
+    // A genuine src wins: an image that already points at a picture is not
+    // waiting for a script, and the data attribute may be a thumbnail or a
+    // tracking variant.
+    match attribute_value(tag, &lower, "src") {
+        Some(src) if !is_placeholder(&src) => tag.to_string(),
+        // Written as a fresh `src` on the end rather than edited in place: the
+        // stale one is dropped by the sanitizer's own duplicate handling, and
+        // splicing inside a tag is how quoting bugs happen.
+        _ => format!(
+            "{} src=\"{}\">",
+            strip_src(tag, &lower),
+            escape_quotes(&real)
+        ),
+    }
+}
+
+/// A `src` that is not a picture: the inline pixel or blank a lazy loader parks
+/// there until its script runs.
+fn is_placeholder(src: &str) -> bool {
+    let src = src.trim();
+    src.is_empty() || src.starts_with("data:") || src.contains("blank.gif")
+}
+
+fn attribute_value(tag: &str, lower: &str, name: &str) -> Option<String> {
+    let at = lower.find(&format!("{name}=\""))? + name.len() + 2;
+    let rest = &tag[at..];
+    let end = rest.find('"')?;
+    let value = rest[..end].trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+/// Drop the existing `src="…"`, leaving the tag open for a new one.
+fn strip_src(tag: &str, lower: &str) -> String {
+    let body = tag.trim_end().trim_end_matches('>').trim_end_matches('/');
+    match lower.find(" src=\"") {
+        Some(at) if at < body.len() => {
+            let after = &body[at + 6..];
+            match after.find('"') {
+                Some(end) => format!("{}{}", &body[..at], &after[end + 1..]),
+                None => body.to_string(),
+            }
+        }
+        _ => body.to_string(),
+    }
+}
+
+fn escape_quotes(value: &str) -> String {
+    value.replace('"', "&quot;")
 }
 
 /// Containers worth deleting when they hold nothing.
@@ -450,6 +551,49 @@ mod tests {
         );
         assert!(html.contains("Hello"));
         assert_eq!(feed.items[0].content_text.as_deref(), Some("Hello world"));
+    }
+
+    #[test]
+    fn a_lazily_loaded_image_gets_the_source_its_script_would_have_given_it() {
+        // The shape half the web ships: a one-pixel placeholder in `src` and the
+        // real picture in a data attribute ammonia strips. Left alone, the
+        // article renders with blanks where its pictures were.
+        let html = sanitize(
+            "<p><img src=\"data:image/gif;base64,R0lGODlhAQABAAA\" \
+             data-src=\"https://example.com/real.jpg\" alt=\"a\"></p>",
+            None,
+        );
+        assert!(html.contains("https://example.com/real.jpg"), "{html}");
+        assert!(!html.contains("data:image/gif"), "{html}");
+        assert!(
+            html.contains("alt=\"a\""),
+            "the rest of the tag was lost: {html}"
+        );
+    }
+
+    #[test]
+    fn a_real_src_is_never_replaced_by_a_data_attribute() {
+        // A picture that is already a picture is not waiting for a script, and
+        // the data attribute is as likely to be a thumbnail or a tracker.
+        let html = sanitize(
+            "<img src=\"https://example.com/full.jpg\" \
+             data-src=\"https://example.com/thumb.jpg\">",
+            None,
+        );
+        assert!(html.contains("full.jpg"), "{html}");
+        assert!(!html.contains("thumb.jpg"), "{html}");
+    }
+
+    #[test]
+    fn an_image_with_no_src_at_all_takes_the_lazy_one() {
+        let html = sanitize("<img data-original=\"https://example.com/a.png\">", None);
+        assert!(html.contains("a.png"), "{html}");
+    }
+
+    #[test]
+    fn markup_with_no_lazy_images_is_returned_untouched() {
+        let plain = "<p>Hello <img src=\"https://example.com/a.jpg\"> world</p>";
+        assert_eq!(unlazy(plain), plain);
     }
 
     #[test]

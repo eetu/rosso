@@ -1,5 +1,6 @@
 <script lang="ts">
   import RotateCw from "@lucide/svelte/icons/rotate-cw";
+  import Sparkles from "@lucide/svelte/icons/sparkles";
   import Trash2 from "@lucide/svelte/icons/trash-2";
   import TriangleAlert from "@lucide/svelte/icons/triangle-alert";
 
@@ -129,6 +130,11 @@
             <span class="warn" title={feed.last_error}
               ><TriangleAlert size={13} /></span
             >
+          {:else if feed.icon}
+            <!-- A `data:` URI the backend fetched once, not a link to the
+                 publisher: an <img> pointing at their host would announce the
+                 reader to every site in this list on every page load. -->
+            <img class="icon" src={feed.icon} alt="" width="14" height="14" />
           {/if}
           <span class="name">{feed.title}</span>
           {#if feed.unread > 0}
@@ -136,6 +142,23 @@
           {/if}
         </button>
         <span class="actions">
+          <!-- Some feeds say everything in the title — release notes, a commit
+               log — and a summary of one costs a generation to restate the
+               headline. Off leaves what was already written alone. -->
+          {#if reader.settings?.llm_available || !feed.llm_enabled}
+            <button
+              class:off={!feed.llm_enabled}
+              onclick={() => reader.setFeedLlm(feed.id, !feed.llm_enabled)}
+              aria-label={feed.llm_enabled
+                ? "stop summarizing {feed.title}"
+                : "summarize {feed.title}"}
+              title={feed.llm_enabled
+                ? "summarized and scored"
+                : "not read by the model"}
+            >
+              <Sparkles size={13} />
+            </button>
+          {/if}
           <button
             onclick={() => refresh(feed.id)}
             aria-label="refresh {feed.title}"
@@ -285,6 +308,23 @@
 
   .actions button:hover {
     color: var(--halo-text-main);
+  }
+
+  /* Struck through rather than merely dimmed: every icon in this row is quiet,
+     so dimming one more would not read as a state. */
+  .actions button.off {
+    color: var(--halo-text-light);
+    text-decoration: line-through;
+  }
+
+  /* Sits where the warning triangle would, so a feed does not shift sideways
+     when it starts failing. */
+  .icon {
+    flex: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 2px;
+    object-fit: contain;
   }
 
   .empty {

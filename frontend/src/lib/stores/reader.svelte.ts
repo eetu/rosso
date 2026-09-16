@@ -321,6 +321,16 @@ export const reader = {
     return result;
   },
 
+  /**
+   * Turning it back on makes the feed's items candidates again on their own:
+   * they were never marked enriched while it was off, so nothing has to walk
+   * the table. Turning it off leaves existing summaries alone.
+   */
+  async setFeedLlm(id: number, enabled: boolean) {
+    const updated = await api.updateFeed(id, { llm_enabled: enabled });
+    feeds = feeds.map((f) => (f.id === id ? updated : f));
+  },
+
   async removeFeed(id: number) {
     await api.deleteFeed(id);
     if (feedId === id) feedId = null;

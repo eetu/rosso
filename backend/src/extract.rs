@@ -116,7 +116,7 @@ pub async fn extract(http: &Client, url: &str, allow_private: bool) -> anyhow::R
 /// changes in between would slip past. Closing that needs a custom connector
 /// bound to the address checked here; the size cap and the fact that only GET is
 /// ever issued are what bound the damage until then.
-async fn refuse_internal(url: &str) -> anyhow::Result<()> {
+pub async fn refuse_internal(url: &str) -> anyhow::Result<()> {
     let parsed = Url::parse(url)?;
     if !matches!(parsed.scheme(), "http" | "https") {
         anyhow::bail!("refusing scheme {}", parsed.scheme());

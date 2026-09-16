@@ -35,6 +35,9 @@ pub struct Feed {
     pub next_fetch_at: String,
     pub last_error: Option<String>,
     pub disabled: bool,
+    /// Whether the model reads this feed. Off leaves its items unsummarized and
+    /// unscored, which for a release-notes feed is the right answer.
+    pub llm_enabled: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -122,6 +125,7 @@ pub struct FeedPatch {
     pub custom_title: Option<String>,
     pub folder_id: Option<i64>,
     pub disabled: Option<bool>,
+    pub llm_enabled: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -136,7 +140,8 @@ pub struct ItemPatch {
 
 const FEED_COLUMNS: &str = "f.id, f.url, f.site_url, \
      COALESCE(NULLIF(f.custom_title, ''), NULLIF(f.title, ''), f.url) AS shown_title, \
-     f.folder_id, f.icon, f.last_fetch_at, f.next_fetch_at, f.last_error, f.disabled";
+     f.folder_id, f.icon, f.last_fetch_at, f.next_fetch_at, f.last_error, f.disabled, \
+     f.llm_enabled";
 
 fn feed_from_row(row: &Row) -> rusqlite::Result<Feed> {
     Ok(Feed {
@@ -151,6 +156,7 @@ fn feed_from_row(row: &Row) -> rusqlite::Result<Feed> {
         next_fetch_at: row.get("next_fetch_at")?,
         last_error: row.get("last_error")?,
         disabled: row.get::<_, i64>("disabled")? != 0,
+        llm_enabled: row.get::<_, i64>("llm_enabled")? != 0,
     })
 }
 
@@ -237,7 +243,68 @@ pub async fn update_feed(db: &Db, id: i64, patch: FeedPatch) -> rusqlite::Result
                 params![id, i64::from(disabled)],
             )?;
         }
+        if let Some(llm_enabled) = patch.llm_enabled {
+            changed += c.execute(
+                "UPDATE feeds SET llm_enabled = ?2 WHERE id = ?1",
+                params![id, i64::from(llm_enabled)],
+            )?;
+            // Turning it back on has to undo the opt-out's own bookkeeping:
+            // items skipped while it was off were never marked enriched, so they
+            // become candidates again on their own. Turning it off leaves what
+            // was already written alone — a summary is not wrong just because
+            // you stopped wanting new ones.
+        }
         Ok(changed > 0)
+    })
+    .await
+}
+
+/// A feed whose site has not had its icon fetched yet.
+#[derive(Debug)]
+pub struct IconCandidate {
+    pub id: i64,
+    pub site_url: String,
+}
+
+/// One feed at a time: icons are decoration, and a burst of requests to twenty
+/// publishers for decoration is not a good use of anyone's server.
+pub async fn feed_needing_icon(db: &Db) -> rusqlite::Result<Option<IconCandidate>> {
+    db.with(|c| {
+        c.query_row(
+            "SELECT id, site_url FROM feeds
+             WHERE icon IS NULL AND site_url IS NOT NULL AND icon_attempts < ?1
+             ORDER BY id LIMIT 1",
+            params![crate::feed::favicon::MAX_ATTEMPTS],
+            |r| {
+                Ok(IconCandidate {
+                    id: r.get("id")?,
+                    site_url: r.get("site_url")?,
+                })
+            },
+        )
+        .optional()
+    })
+    .await
+}
+
+pub async fn record_icon(db: &Db, id: i64, icon: Option<String>) -> rusqlite::Result<()> {
+    db.with(move |c| {
+        c.execute(
+            "UPDATE feeds SET icon = ?2, icon_attempts = 0 WHERE id = ?1",
+            params![id, icon],
+        )?;
+        Ok(())
+    })
+    .await
+}
+
+pub async fn record_icon_failure(db: &Db, id: i64) -> rusqlite::Result<()> {
+    db.with(move |c| {
+        c.execute(
+            "UPDATE feeds SET icon_attempts = icon_attempts + 1 WHERE id = ?1",
+            params![id],
+        )?;
+        Ok(())
     })
     .await
 }
@@ -750,6 +817,39 @@ pub async fn mark_read(db: &Db, scope: MarkReadScope) -> rusqlite::Result<usize>
     .await
 }
 
+/// Delete read items older than `days`, up to `limit` of them.
+///
+/// Three things are never deleted, and each is a different kind of "still
+/// wanted": starred is the reader saying so outright, unread is the reader not
+/// having looked yet, and an item a digest refers to is what keeps that digest
+/// from becoming a page of dead links.
+///
+/// The FTS index follows through its delete trigger and the embedding through
+/// its foreign key, so this one statement is the whole operation.
+pub async fn prune_items(db: &Db, days: i64, limit: u32) -> rusqlite::Result<usize> {
+    db.with(move |c| {
+        let cutoff = iso(Utc::now() - chrono::Duration::days(days));
+        c.execute(
+            "DELETE FROM items WHERE id IN (
+                 SELECT i.id FROM items i
+                 WHERE i.read_at IS NOT NULL
+                   AND i.starred_at IS NULL
+                   AND COALESCE(i.published_at, i.fetched_at) < :cutoff
+                   AND NOT EXISTS (
+                       SELECT 1 FROM digests d, json_each(d.content, '$.threads')
+                       WHERE EXISTS (
+                           SELECT 1 FROM json_each(json_each.value, '$.item_ids') AS ref
+                           WHERE ref.value = i.id
+                       )
+                   )
+                 LIMIT :limit
+             )",
+            named_params! { ":cutoff": cutoff, ":limit": limit },
+        )
+    })
+    .await
+}
+
 // ------------------------------------------------------------------- digests
 
 /// A candidate for the day's digest, as the model sees it.
@@ -1059,8 +1159,10 @@ pub async fn due_for_embedding(
         let mut stmt = c.prepare(
             "SELECT i.id, i.title, i.content_text
              FROM items i
+             JOIN feeds f ON f.id = i.feed_id
              LEFT JOIN item_embeddings e ON e.item_id = i.id
-             WHERE i.embed_attempts < :max_attempts
+             WHERE f.llm_enabled = 1
+               AND i.embed_attempts < :max_attempts
                AND (e.item_id IS NULL OR e.model IS NOT :model)
                AND NOT (i.truncated = 1
                         AND i.extracted = 0
@@ -1343,7 +1445,8 @@ pub async fn due_for_enrichment(
                     i.content_text,
                     i.summary
              FROM items i JOIN feeds f ON f.id = i.feed_id
-             WHERE i.enrich_attempts < :max_attempts
+             WHERE f.llm_enabled = 1
+               AND i.enrich_attempts < :max_attempts
                AND (i.enriched_at IS NULL OR i.scored_profile IS NOT :profile)
                AND (i.enriched_at IS NOT NULL
                     OR (i.content_text IS NOT NULL AND length(i.content_text) > 0))

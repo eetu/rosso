@@ -1,6 +1,8 @@
 //! The `/api/*` surface. Every handler takes `_: Auth`.
 
 use axum::extract::{Path, Query, State};
+use axum::http::header;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
@@ -20,6 +22,8 @@ pub fn routes() -> Router<AppState> {
         .route("/api/feeds", get(list_feeds).post(add_feed))
         .route("/api/feeds/{id}", patch(update_feed).delete(delete_feed))
         .route("/api/feeds/{id}/refresh", post(refresh_feed))
+        .route("/api/opml/import", post(import_opml))
+        .route("/api/opml/export", get(export_opml))
         .route("/api/items", get(list_items))
         .route("/api/items/{id}", get(get_item).patch(update_item))
         .route("/api/items/mark-read", post(mark_read))
@@ -182,6 +186,70 @@ async fn refresh_feed(
         .await?
         .map(Json)
         .ok_or(AppError::NotFound)
+}
+
+#[derive(Serialize)]
+struct ImportResponse {
+    added: usize,
+    /// Already subscribed. Re-importing the same file is how people check a
+    /// migration worked, so this is an ordinary outcome rather than a failure.
+    skipped: usize,
+}
+
+/// Subscribe to everything in an OPML file.
+///
+/// The URLs are taken as given — no discovery pass. A file holds hundreds of
+/// them, and resolving each one would mean hundreds of outbound requests before
+/// the response, against hosts that did nothing to deserve a burst. A URL that
+/// turns out not to be a feed simply fails its first poll and says so on the feed
+/// row, which is the same path a feed that dies next week takes.
+async fn import_opml(
+    _: Auth,
+    State(state): State<AppState>,
+    body: String,
+) -> AppResult<Json<ImportResponse>> {
+    let outlines = feed::opml::parse(&body);
+    if outlines.is_empty() {
+        return Err(AppError::BadRequest("no subscriptions in that file".into()));
+    }
+
+    let mut added = 0;
+    let mut skipped = 0;
+    for outline in outlines {
+        let inserted = store::insert_feed(
+            &state.db,
+            outline.xml_url,
+            outline.title,
+            outline.site_url,
+            None,
+            None,
+        )
+        .await?;
+        if inserted.is_some() {
+            added += 1;
+        } else {
+            skipped += 1;
+        }
+    }
+    tracing::info!(added, skipped, "opml import");
+    Ok(Json(ImportResponse { added, skipped }))
+}
+
+/// The subscription list, as a file a browser downloads.
+async fn export_opml(_: Auth, State(state): State<AppState>) -> AppResult<Response> {
+    let feeds = store::list_feeds(&state.db).await?;
+    let xml = feed::opml::render(&feeds, &chrono::Utc::now().to_rfc3339());
+    Ok((
+        [
+            (header::CONTENT_TYPE, "text/x-opml+xml; charset=utf-8"),
+            (
+                header::CONTENT_DISPOSITION,
+                "attachment; filename=\"rosso.opml\"",
+            ),
+        ],
+        xml,
+    )
+        .into_response())
 }
 
 async fn list_items(

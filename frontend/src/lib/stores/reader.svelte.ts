@@ -182,6 +182,13 @@ export const reader = {
     return feed;
   },
 
+  /** Throws like `addFeed`, so the dialog can report a file it made nothing of. */
+  async importOpml(xml: string) {
+    const result = await api.importOpml(xml);
+    await Promise.all([refreshCounts(), loadItems()]);
+    return result;
+  },
+
   async removeFeed(id: number) {
     await api.deleteFeed(id);
     if (feedId === id) feedId = null;

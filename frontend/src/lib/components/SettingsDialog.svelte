@@ -26,6 +26,28 @@
     }
   });
 
+  let file: HTMLInputElement | null = $state(null);
+  let importing = $state(false);
+  let importReport = $state("");
+
+  async function runImport(event: Event) {
+    const input = event.currentTarget as HTMLInputElement;
+    const chosen = input.files?.[0];
+    if (!chosen) return;
+    importing = true;
+    importReport = "";
+    try {
+      const { added, skipped } = await reader.importOpml(await chosen.text());
+      importReport = `${added} added, ${skipped} already subscribed. they fetch on the next poll.`;
+    } catch (e) {
+      importReport = e instanceof Error ? e.message : String(e);
+    } finally {
+      importing = false;
+      // Cleared so choosing the same file twice fires `change` the second time.
+      input.value = "";
+    }
+  }
+
   async function save() {
     saving = true;
     saved = false;
@@ -97,6 +119,30 @@
       {/if}
     </span>
   </div>
+
+  <div class="subs">
+    <span class="label">subscriptions</span>
+    <div class="actions">
+      <!-- A link, not a fetch: the browser's own download path sends the
+           forward-auth cookie and names the file from the header. `resolve()` is
+           for SvelteKit routes, and this is the backend's. -->
+      <!-- eslint-disable-next-line svelte/no-navigation-without-resolve -->
+      <a href="/api/opml/export" download="rosso.opml">export opml</a>
+      <button onclick={() => file?.click()} disabled={importing}>
+        {importing ? "importing…" : "import opml"}
+      </button>
+      <input
+        bind:this={file}
+        type="file"
+        accept=".opml,.xml,text/xml,text/x-opml"
+        onchange={runImport}
+        hidden
+      />
+    </div>
+  </div>
+  {#if importReport}
+    <p class="hint">{importReport}</p>
+  {/if}
 
   <footer>
     <span class="hint">
@@ -216,6 +262,46 @@
     margin: 0;
     font-size: 0.72rem;
     color: var(--halo-text-muted);
+  }
+
+  .subs {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    margin-top: 0.75rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--halo-border);
+  }
+
+  .subs .label {
+    font-size: 0.75rem;
+    color: var(--halo-text-muted);
+  }
+
+  .actions {
+    display: flex;
+    gap: 0.5rem;
+  }
+
+  .actions a,
+  .actions button {
+    padding: 0.25rem 0.55rem;
+    border: 1px solid var(--halo-border);
+    border-radius: var(--halo-radius);
+    color: var(--halo-text-muted);
+    font-size: 0.75rem;
+    text-decoration: none;
+  }
+
+  .actions a:hover,
+  .actions button:hover {
+    color: var(--halo-text-main);
+  }
+
+  .actions button:disabled {
+    cursor: default;
   }
 
   footer {

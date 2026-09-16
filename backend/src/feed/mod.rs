@@ -1,6 +1,7 @@
 pub mod comments;
 pub mod discover;
 pub mod fetch;
+pub mod opml;
 pub mod parse;
 pub mod poller;
 pub mod schedule;

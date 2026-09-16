@@ -168,6 +168,14 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(patch),
     }),
+  /** The whole file's text. Export is a plain link — the browser downloads it. */
+  importOpml: (xml: string) =>
+    request<{ added: number; skipped: number }>("/api/opml/import", {
+      method: "POST",
+      headers: { accept: "application/json", "content-type": "text/xml" },
+      body: xml,
+    }),
+
   markRead: (feed_id?: number) =>
     request<{ marked: number }>("/api/items/mark-read", {
       method: "POST",

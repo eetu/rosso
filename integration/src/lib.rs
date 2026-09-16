@@ -126,6 +126,17 @@ impl Stack {
         r.json().await.expect("json")
     }
 
+    /// A body that is not JSON — the OPML import takes a file's text.
+    pub async fn post_text(&self, route: &str, body: &str) -> reqwest::Response {
+        self.client
+            .post(format!("{}{route}", self.base))
+            .header("content-type", "text/xml")
+            .body(body.to_string())
+            .send()
+            .await
+            .expect("request failed")
+    }
+
     pub async fn put_json(&self, route: &str, body: serde_json::Value) -> serde_json::Value {
         let r = self
             .client

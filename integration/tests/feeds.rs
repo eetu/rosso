@@ -296,6 +296,118 @@ async fn reading_and_starring_moves_items_between_views() {
 
 #[tokio::test]
 #[ignore = "spawns the backend binary"]
+async fn search_reaches_read_items_the_active_view_would_hide() {
+    let server = feed_server(rss(&[("a", "Hedgehog season"), ("b", "Something else")])).await;
+    let stack = Stack::start().await.unwrap();
+    stack
+        .post_json("/api/feeds", json!({ "url": server.uri() + "/feed.xml" }))
+        .await;
+
+    let items = stack.get_json("/api/items").await;
+    let id = items["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["title"] == "Hedgehog season")
+        .and_then(|i| i["id"].as_i64())
+        .unwrap();
+    stack
+        .patch_json(&format!("/api/items/{id}"), json!({ "read": true }))
+        .await;
+
+    // Read, so the default view no longer holds it — and a search that honoured
+    // the view would find nothing, which is the whole point of searching.
+    let found = stack.get_json("/api/items?q=hedgehog").await;
+    assert_eq!(found["items"].as_array().unwrap().len(), 1);
+    assert_eq!(found["items"][0]["id"], id);
+
+    // The body is indexed too, and a partial word matches as you type it.
+    assert_eq!(
+        stack.get_json("/api/items?q=body+of+hedge").await["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    // Punctuation is a separator, not FTS5 syntax — neither of these may 500.
+    for route in ["/api/items?q=%22unclosed", "/api/items?q=-NEAR+OR"] {
+        let res = stack.get(route).await;
+        assert!(res.status().is_success(), "GET {route} → {}", res.status());
+    }
+    // A query the tokenizer empties means "nothing matched", not "no filter".
+    assert!(stack.get_json("/api/items?q=%2A%2A%2A").await["items"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+#[ignore = "spawns the backend binary"]
+async fn an_opml_file_round_trips_through_subscribe_and_export() {
+    let server = feed_server(rss(&[("a", "First")])).await;
+    let stack = Stack::start().await.unwrap();
+    let url = server.uri() + "/feed.xml";
+
+    let opml = format!(
+        "<opml version=\"2.0\"><body><outline text=\"Tech\">\
+         <outline type=\"rss\" title=\"Imported\" xmlUrl=\"{url}\"/>\
+         </outline></body></opml>"
+    );
+    let report: serde_json::Value = stack
+        .post_text("/api/opml/import", &opml)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(report["added"], 1);
+
+    // Importing takes the URL as given rather than running discovery, so the
+    // feed exists before it has ever been fetched and gets its title on the
+    // first poll.
+    let feeds = stack.get_json("/api/feeds").await;
+    assert_eq!(feeds["feeds"].as_array().unwrap().len(), 1);
+    let id = feeds["feeds"][0]["id"].as_i64().unwrap();
+    stack
+        .post_json(&format!("/api/feeds/{id}/refresh"), json!({}))
+        .await;
+    assert_eq!(
+        stack.get_json("/api/items").await["items"][0]["title"],
+        "First"
+    );
+
+    // The same file again subscribes to nothing — re-importing is how people
+    // check a migration worked.
+    let again: serde_json::Value = stack
+        .post_text("/api/opml/import", &opml)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!((&again["added"], &again["skipped"]), (&json!(0), &json!(1)));
+
+    let exported = stack.get("/api/opml/export").await;
+    assert_eq!(
+        exported
+            .headers()
+            .get("content-disposition")
+            .and_then(|v| v.to_str().ok()),
+        Some("attachment; filename=\"rosso.opml\"")
+    );
+    assert!(exported.text().await.unwrap().contains(&url));
+}
+
+#[tokio::test]
+#[ignore = "spawns the backend binary"]
+async fn a_file_with_no_subscriptions_is_a_bad_request() {
+    let stack = Stack::start().await.unwrap();
+    let res = stack
+        .post_text("/api/opml/import", "<opml><body></body></opml>")
+        .await;
+    assert_eq!(res.status(), 400);
+}
+
+#[tokio::test]
+#[ignore = "spawns the backend binary"]
 async fn the_api_is_closed_when_the_dev_bypass_is_off() {
     // DEV_AUTH is applied before `extra`, so this overrides the harness default
     // and exercises the same gate production runs behind.

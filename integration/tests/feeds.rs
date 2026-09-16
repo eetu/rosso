@@ -296,6 +296,87 @@ async fn reading_and_starring_moves_items_between_views() {
 
 #[tokio::test]
 #[ignore = "spawns the backend binary"]
+async fn mark_read_clears_the_narrowing_it_was_given_and_nothing_else() {
+    // The bug this pins: mark-read took only `feed_id`, so pressing it while
+    // the list was filtered to one topic or one search cleared every unread
+    // item in the archive — a destructive action on a selection it could not
+    // see, with nothing to undo it.
+    let one = feed_server(rss(&[("a", "Hedgehog season"), ("b", "Badger season")])).await;
+    let two = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/feed.xml"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw(rss(&[("c", "Something else")]), "application/rss+xml"),
+        )
+        .mount(&two)
+        .await;
+
+    let stack = Stack::start().await.unwrap();
+    let first = stack
+        .post_json("/api/feeds", json!({ "url": one.uri() + "/feed.xml" }))
+        .await;
+    stack
+        .post_json("/api/feeds", json!({ "url": two.uri() + "/feed.xml" }))
+        .await;
+    assert_eq!(
+        stack.get_json("/api/items").await["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+
+    // A search marks what the search found, and leaves the rest alone.
+    let marked = stack
+        .post_json("/api/items/mark-read", json!({ "q": "hedgehog" }))
+        .await;
+    assert_eq!(marked["marked"], 1);
+    assert_eq!(
+        stack.get_json("/api/items").await["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+
+    // A feed marks its own, and leaves the other feed alone.
+    let marked = stack
+        .post_json(
+            "/api/items/mark-read",
+            json!({ "feed_id": first["id"].as_i64().unwrap() }),
+        )
+        .await;
+    assert_eq!(marked["marked"], 1);
+    let left = stack.get_json("/api/items").await;
+    assert_eq!(left["items"].as_array().unwrap().len(), 1);
+    assert_eq!(left["items"][0]["title"], "Something else");
+
+    // A search that matches nothing marks nothing — emphatically not
+    // everything, which is what dropping the clause would do.
+    let marked = stack
+        .post_json("/api/items/mark-read", json!({ "q": "zzzznothing" }))
+        .await;
+    assert_eq!(marked["marked"], 0);
+    assert_eq!(
+        stack.get_json("/api/items").await["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // And unnarrowed still means everything.
+    let marked = stack.post_json("/api/items/mark-read", json!({})).await;
+    assert_eq!(marked["marked"], 1);
+    assert!(stack.get_json("/api/items").await["items"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+#[ignore = "spawns the backend binary"]
 async fn search_reaches_read_items_the_active_view_would_hide() {
     let server = feed_server(rss(&[("a", "Hedgehog season"), ("b", "Something else")])).await;
     let stack = Stack::start().await.unwrap();

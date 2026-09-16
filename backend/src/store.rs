@@ -672,13 +672,80 @@ pub async fn update_item(db: &Db, id: i64, patch: ItemPatch) -> rusqlite::Result
 }
 
 /// Mark everything read, optionally narrowed to one feed.
-pub async fn mark_read(db: &Db, feed_id: Option<i64>) -> rusqlite::Result<usize> {
+/// What the list is showing, for mark-read to act on.
+#[derive(Debug, Default, Deserialize)]
+pub struct MarkReadScope {
+    pub feed_id: Option<i64>,
+    pub tag: Option<String>,
+    pub q: Option<String>,
+}
+
+impl MarkReadScope {
+    /// Nothing narrows it: this clears the whole archive. The UI asks first.
+    pub fn is_everything(&self) -> bool {
+        self.feed_id.is_none()
+            && self.tag.as_deref().is_none_or(str::is_empty)
+            && self.q.as_deref().is_none_or(str::is_empty)
+    }
+}
+
+/// Mark read exactly what the list is showing.
+///
+/// It used to take only `feed_id`, so pressing the button while looking at one
+/// topic cleared every unread item in the archive — a destructive action on a
+/// selection it could not see. The narrowing now comes from the same three
+/// filters the list itself uses.
+///
+/// Clusters go whole. A story dismissed is dismissed, and leaving the collapsed
+/// members unread would be invisible right up until the dedupe threshold changed
+/// and they all came back.
+pub async fn mark_read(db: &Db, scope: MarkReadScope) -> rusqlite::Result<usize> {
+    let search = match scope.q.as_deref().map(str::trim).filter(|q| !q.is_empty()) {
+        Some(raw) => match fts_query(raw) {
+            Some(expr) => Some(expr),
+            // A query matching nothing marks nothing — emphatically not
+            // everything, which is what dropping the clause would do.
+            None => return Ok(0),
+        },
+        None => None,
+    };
+
     db.with(move |c| {
-        c.execute(
-            "UPDATE items SET read_at = ?1
-             WHERE read_at IS NULL AND (?2 IS NULL OR feed_id = ?2)",
-            params![now_iso(), feed_id],
-        )
+        let tag_clause = if scope.tag.is_some() {
+            "AND EXISTS (SELECT 1 FROM json_each(i.tags_json) WHERE json_each.value = :tag)"
+        } else {
+            ""
+        };
+        let search_clause = if search.is_some() {
+            "AND i.id IN (SELECT rowid FROM items_fts WHERE items_fts MATCH :q)"
+        } else {
+            ""
+        };
+        let sql = format!(
+            "WITH matched AS (
+                 SELECT i.id, i.cluster_id FROM items i
+                 WHERE i.read_at IS NULL
+                   AND (:feed_id IS NULL OR i.feed_id = :feed_id)
+                   {tag_clause}
+                   {search_clause}
+             )
+             UPDATE items SET read_at = :now
+             WHERE read_at IS NULL
+               AND (id IN (SELECT id FROM matched)
+                    OR cluster_id IN
+                       (SELECT cluster_id FROM matched WHERE cluster_id IS NOT NULL))"
+        );
+
+        let now = now_iso();
+        let mut binds: Vec<(&str, &dyn rusqlite::ToSql)> =
+            vec![(":feed_id", &scope.feed_id), (":now", &now)];
+        if scope.tag.is_some() {
+            binds.push((":tag", &scope.tag));
+        }
+        if search.is_some() {
+            binds.push((":q", &search));
+        }
+        c.execute(&sql, &binds[..])
     })
     .await
 }

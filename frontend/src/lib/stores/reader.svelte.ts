@@ -318,9 +318,28 @@ export const reader = {
     );
   },
 
+  /**
+   * What the button says: mark read what you are looking at. It used to send
+   * only the feed, so pressing it while filtered to one topic cleared the whole
+   * archive — a destructive action on a selection it could not see.
+   */
+  get markReadScope() {
+    if (feedId !== null) {
+      return feeds.find((f) => f.id === feedId)?.title ?? "this feed";
+    }
+    if (tag) return `the ${tag} topic`;
+    if (q) return `these search results`;
+    return null;
+  },
+
   async markAllRead() {
-    await api.markRead(feedId ?? undefined);
+    const { marked } = await api.markRead({
+      feed_id: feedId ?? undefined,
+      tag: tag ?? undefined,
+      q: q || undefined,
+    });
     await Promise.all([refreshCounts(), loadItems()]);
+    return marked;
   },
 };
 

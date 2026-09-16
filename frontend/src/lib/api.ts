@@ -215,9 +215,14 @@ export const api = {
       body: xml,
     }),
 
-  markRead: (feed_id?: number) =>
+  /** Clears the unread matching the same narrowing the list is showing. */
+  markRead: (scope: { feed_id?: number; tag?: string; q?: string } = {}) =>
     request<{ marked: number }>("/api/items/mark-read", {
       method: "POST",
-      body: JSON.stringify({ feed_id: feed_id ?? null }),
+      body: JSON.stringify({
+        feed_id: scope.feed_id ?? null,
+        tag: scope.tag ?? null,
+        q: scope.q ?? null,
+      }),
     }),
 };

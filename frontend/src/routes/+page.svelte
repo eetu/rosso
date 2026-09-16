@@ -35,6 +35,30 @@
     reader.open || reader.opening !== null ? "item" : navOpen ? "nav" : "list",
   );
 
+  const markReadLabel = $derived(
+    reader.markReadScope
+      ? `mark ${reader.markReadScope} read`
+      : "mark everything read",
+  );
+
+  /**
+   * Only the unnarrowed case asks. Clearing one feed or one topic is an ordinary
+   * thing to do a dozen times a day and a prompt each time would train the
+   * answer out of you — which is exactly what makes the one prompt that matters
+   * worth something.
+   */
+  async function markRead() {
+    const unread = reader.totalUnread;
+    if (
+      !reader.markReadScope &&
+      unread > 0 &&
+      !confirm(`mark all ${unread} unread items read?`)
+    ) {
+      return;
+    }
+    await reader.markAllRead();
+  }
+
   const backLabel = $derived(
     reader.open ? "back to the list" : navOpen ? "close sources" : "sources",
   );
@@ -121,7 +145,7 @@
   </button>
   <Wordmark />
   <div class="right">
-    <button class="mark" onclick={() => reader.markAllRead()}>
+    <button class="mark" onclick={markRead} title={markReadLabel}>
       <CheckCheck size={14} /> <span class="label">mark read</span>
     </button>
     <button

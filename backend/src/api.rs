@@ -114,9 +114,9 @@ struct ItemsResponse {
     mode: Option<&'static str>,
 }
 
-#[derive(Deserialize)]
-struct MarkReadRequest {
-    feed_id: Option<i64>,
+#[derive(Serialize)]
+struct MarkReadResponse {
+    marked: usize,
 }
 
 async fn list_feeds(_: Auth, State(state): State<AppState>) -> AppResult<Json<FeedsResponse>> {
@@ -370,11 +370,15 @@ async fn update_item(
         .ok_or(AppError::NotFound)
 }
 
+/// Clear the unread the list is showing — the same feed, topic and search the
+/// list itself is narrowed by, rather than everything regardless.
 async fn mark_read(
     _: Auth,
     State(state): State<AppState>,
-    Json(req): Json<MarkReadRequest>,
-) -> AppResult<Json<Value>> {
-    let marked = store::mark_read(&state.db, req.feed_id).await?;
-    Ok(Json(json!({ "marked": marked })))
+    Json(scope): Json<store::MarkReadScope>,
+) -> AppResult<Json<MarkReadResponse>> {
+    let everything = scope.is_everything();
+    let marked = store::mark_read(&state.db, scope).await?;
+    tracing::info!(marked, everything, "marked read");
+    Ok(Json(MarkReadResponse { marked }))
 }

@@ -9,6 +9,7 @@
 
   let profile = $state("");
   let threshold = $state(65);
+  let dedupe = $state(0.9);
   let model = $state("");
   let saving = $state(false);
   let saved = $state(false);
@@ -21,6 +22,7 @@
     if (settings && !seeded) {
       profile = settings.interest_profile;
       threshold = settings.score_threshold;
+      dedupe = settings.dedupe_threshold;
       model = settings.llm_model;
       seeded = true;
     }
@@ -55,6 +57,7 @@
       await reader.saveSettings({
         interest_profile: profile,
         score_threshold: threshold,
+        dedupe_threshold: dedupe,
         llm_model: model,
       });
       saved = true;
@@ -104,6 +107,17 @@
         max="100"
       />
     </span>
+    <span>
+      <label for="dedupe">same story at</label>
+      <input
+        id="dedupe"
+        type="number"
+        bind:value={dedupe}
+        min="0.5"
+        max="1"
+        step="0.01"
+      />
+    </span>
     <span class="grow">
       <label for="model">model</label>
       {#if settings && settings.models.length > 0}
@@ -119,6 +133,14 @@
       {/if}
     </span>
   </div>
+
+  <p class="hint">
+    {#if dedupe >= 1}
+      duplicates off: every item keeps its own row.
+    {:else}
+      items this alike collapse to one row. the rest are listed on it.
+    {/if}
+  </p>
 
   <div class="subs">
     <span class="label">subscriptions</span>

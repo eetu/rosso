@@ -29,6 +29,11 @@
           {/if}
           <span class="feed">{item.feed_title}</span>
           <span class="age">{relativeTime(item.published_at)}</span>
+          {#if item.cluster_size > 1}
+            <!-- The rows this one stands in for. They are not lost: opening it
+                 lists them. -->
+            <span class="sources">{item.cluster_size} sources</span>
+          {/if}
         </span>
         <span class="title">{item.title || "(untitled)"}</span>
       </button>
@@ -135,6 +140,15 @@
   .age::before {
     content: "·";
     margin-right: 0.4rem;
+  }
+
+  /* Quiet — it is a note about the row, not a second title. */
+  .sources {
+    flex: none;
+    padding: 0 0.3rem;
+    border-radius: var(--halo-radius-pill);
+    background: var(--halo-accent-soft);
+    color: var(--halo-text-muted);
   }
 
   .title {

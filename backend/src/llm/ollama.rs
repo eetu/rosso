@@ -15,6 +15,10 @@ use serde_json::json;
 /// above the shared client's 60 s, so it is always set explicitly.
 const GENERATE_TIMEOUT: Duration = Duration::from_secs(240);
 
+/// Embedding is a forward pass, not a generation — far quicker than a summary,
+/// but a batch still pays the cold-load cost the first time.
+const EMBED_TIMEOUT: Duration = Duration::from_secs(120);
+
 /// Keep the model resident between items. The worker runs one item after
 /// another, so paying the load cost each time would dominate the run.
 const KEEP_ALIVE: &str = "15m";
@@ -68,6 +72,46 @@ pub async fn chat_json<T: DeserializeOwned>(
             truncate(content, 200)
         )
     })
+}
+
+/// Embed a batch of texts.
+///
+/// `/api/embed` takes `input` as an array and answers in one round trip; the
+/// older `/api/embeddings` is one request per string, which over a backlog is the
+/// same work plus a few hundred handshakes.
+///
+/// The width is whatever the model returns — `embeddinggemma:300m` gives 768,
+/// measured rather than assumed, and the caller records it alongside the vector
+/// so a model swap is detectable instead of silently comparing across two
+/// different vector spaces.
+pub async fn embed(
+    http: &reqwest::Client,
+    base: &str,
+    model: &str,
+    inputs: &[String],
+) -> anyhow::Result<Vec<Vec<f32>>> {
+    #[derive(Deserialize)]
+    struct EmbedResponse {
+        embeddings: Vec<Vec<f32>>,
+    }
+
+    let res = http
+        .post(format!("{base}/api/embed"))
+        .timeout(EMBED_TIMEOUT)
+        .json(&json!({ "model": model, "input": inputs, "keep_alive": KEEP_ALIVE }))
+        .send()
+        .await?
+        .error_for_status()?;
+
+    let parsed: EmbedResponse = res.json().await?;
+    // A short answer would silently pair vectors with the wrong items.
+    anyhow::ensure!(
+        parsed.embeddings.len() == inputs.len(),
+        "asked for {} embeddings, got {}",
+        inputs.len(),
+        parsed.embeddings.len()
+    );
+    Ok(parsed.embeddings)
 }
 
 /// List the models the host has installed.

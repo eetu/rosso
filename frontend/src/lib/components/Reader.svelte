@@ -103,6 +103,34 @@
     </div>
   {/if}
 
+  {#if item.siblings.length > 0}
+    <!-- The rows the list collapsed into this one. Without them a dedupe that
+         guessed wrong would be a silent deletion. -->
+    <details class="siblings">
+      <summary
+        >also covered by {item.siblings.length} other{item.siblings.length === 1
+          ? ""
+          : "s"}</summary
+      >
+      <ul>
+        <!-- eslint-disable svelte/no-navigation-without-resolve -->
+        {#each item.siblings as sibling (sibling.id)}
+          <li>
+            <span class="feed">{sibling.feed_title}</span>
+            {#if sibling.url}
+              <a href={sibling.url} target="_blank" rel="noreferrer"
+                >{sibling.title}</a
+              >
+            {:else}
+              <span>{sibling.title}</span>
+            {/if}
+          </li>
+        {/each}
+        <!-- eslint-enable svelte/no-navigation-without-resolve -->
+      </ul>
+    </details>
+  {/if}
+
   {#if item.content_html}
     <!-- Feed HTML is sanitized server-side by ammonia in feed/parse.rs, once,
          before it is ever stored — and the CSP carries no script-src
@@ -233,6 +261,40 @@
     align-items: center;
     gap: 0.2rem;
     flex: none;
+  }
+
+  /* Folded away by default: the point of collapsing the list was not to read
+     the same story five times. */
+  .siblings {
+    margin: 0 0 1rem;
+    font-size: 0.8rem;
+    color: var(--halo-text-muted);
+  }
+
+  .siblings summary {
+    cursor: pointer;
+  }
+
+  .siblings ul {
+    margin: 0.4rem 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .siblings li {
+    display: flex;
+    gap: 0.5rem;
+    padding: 0.15rem 0;
+  }
+
+  .siblings .feed {
+    flex: none;
+    min-width: 7rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--halo-font-heading);
+    font-size: 0.7rem;
   }
 
   .score {

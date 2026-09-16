@@ -79,6 +79,13 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
     )?;
     add_column_if_missing(conn, "items", "enrich_error", "TEXT")?;
     add_column_if_missing(conn, "items", "scored_profile", "TEXT")?;
+    add_column_if_missing(
+        conn,
+        "items",
+        "embed_attempts",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    add_column_if_missing(conn, "items", "embed_error", "TEXT")?;
 
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     Ok(())
@@ -221,6 +228,25 @@ END;
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
+);
+
+-- Embeddings as a plain BLOB of little-endian f32, which is the shape `chat`
+-- already runs. The plan's first choice was `sqlite-vec`; it does not build.
+-- 0.1.9 typedefs `u_int64_t`, a glibc/BSD name musl does not have, so it fails
+-- on the target the image ships; 0.1.10-alpha.4 `#include`s a file the published
+-- crate omits and fails everywhere. See the P4 note in the repo CLAUDE.md.
+--
+-- `model` and `dims` are stored per row rather than assumed: changing the
+-- embedding model makes every existing vector incomparable, and a row that
+-- records which model wrote it can be re-embedded instead of silently compared
+-- against a different vector space. Vectors are unit-normalized on the way in,
+-- so cosine similarity is a plain dot product.
+CREATE TABLE IF NOT EXISTS item_embeddings (
+    item_id    INTEGER PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE,
+    model      TEXT    NOT NULL,
+    dims       INTEGER NOT NULL,
+    embedding  BLOB    NOT NULL,
+    created_at TEXT    NOT NULL
 );
 "#;
 

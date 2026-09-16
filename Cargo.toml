@@ -37,22 +37,17 @@ anyhow = "1.0.104"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 chrono = { version = "0.4.45", features = ["serde"] }
-uuid = { version = "1.26.1", features = ["v4"] }
 url = "2.5.8"
 rand = "0.10.2"
 dotenvy = "0.15.7"
 mime_guess = "2.0.5"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
-futures = "0.3.34"
 
 # Feed domain
 feed-rs = "2.4.0"
 quick-xml = "0.42.0"
 ammonia = "4.1.4"
 dom_smoothie = "0.18.1"
-
-# Vector search (P4 — see the cross-compile risk in the plan)
-sqlite-vec = "0.1.9"
 
 [workspace.dependencies.tempfile]
 version = "3.27.0"

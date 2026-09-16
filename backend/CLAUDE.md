@@ -13,7 +13,8 @@ api.rs        the /api/* handlers
 events.rs     broadcast channel behind /api/stream (SSE)
 extract.rs    readability full-text: background worker + the on-demand path
 settings.rs   user-editable settings rows; config supplies the defaults
-llm/          ollama client, enrichment worker, prompts, the health probe
+llm/          ollama client, enrichment worker, embeddings + dedupe, prompts,
+              the health probe
 util.rs       fnv1a — persisted hashes, so never DefaultHasher
 routes.rs     router, /status, SPA fallback handler, CSP layer
 auth.rs       forward-auth extractor (+ the dev_auth bypass)
@@ -59,6 +60,21 @@ shutdown.rs   bounded graceful drain
   `ROSSO_EXTRACT_ALLOW_PRIVATE=1` so wiremock's loopback works. Without that flag
   every extraction test would go green by being refused before it reached what it
   was testing — if you add one, check *why* it passes.
+- **`sqlite-vec` does not build; do not reach for it again.** 0.1.9 typedefs
+  `u_int64_t`, a glibc/BSD name musl does not define, so it fails on *any* musl
+  target — the cross-compile was never the problem. 0.1.10-alpha.4 removed that
+  block but `#include`s `sqlite-vec-diskann.c`, which the published crate omits,
+  so it fails everywhere including macOS. Embeddings are a `BLOB` of
+  little-endian f32 in `item_embeddings`, unit-normalized on write so cosine is a
+  dot product — the fallback the plan named, and the shape `chat` already runs.
+- **A cluster is identified by its head's own id**, so the head carries
+  `cluster_id = id` and every member carries the head's. That is what lets the
+  list, the feed counts and the topic counts filter to one row per story with a
+  column comparison rather than a correlated subquery per row — and why all three
+  must carry the same clause or the sidebar will count rows the list never shows.
+- **Search does not collapse clusters.** The list hiding a duplicate is the
+  feature; a *search* that hid the report you went looking for, because another
+  outlet ran it first, is a bug you cannot see from the outside.
 - **The event stream is additive, like the LLM.** Nothing it carries is state
   the reader cannot get from a reload, nothing is persisted, and no caller checks
   whether a send reached anyone — a tab with the page closed is the normal case.

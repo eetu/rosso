@@ -14,6 +14,16 @@ use crate::util::fingerprint;
 pub const INTEREST_PROFILE: &str = "interest_profile";
 pub const SCORE_THRESHOLD: &str = "score_threshold";
 pub const LLM_MODEL: &str = "llm_model";
+pub const DEDUPE_THRESHOLD: &str = "dedupe_threshold";
+
+/// Cosine similarity at which two items are the same story. 0.90 is the plan's
+/// starting point, to be tuned against real data rather than trusted.
+///
+/// It is a setting and not a constant because the cost of getting it wrong is
+/// asymmetric: too high only leaves duplicates in the list, while too low hides
+/// unrelated items behind each other. 1.0 or above turns clustering off, which
+/// is the escape hatch if it ever starts hiding things it should not.
+pub const DEFAULT_DEDUPE_THRESHOLD: f32 = 0.90;
 
 /// Default cutoff for the `interesting` view. Deliberately not 50: the midpoint
 /// of a 0-100 scale is "unremarkable", and a view of unremarkable things is the
@@ -28,6 +38,7 @@ pub struct Settings {
     pub interest_profile: String,
     pub score_threshold: i64,
     pub llm_model: String,
+    pub dedupe_threshold: f32,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -35,11 +46,18 @@ pub struct SettingsPatch {
     pub interest_profile: Option<String>,
     pub score_threshold: Option<i64>,
     pub llm_model: Option<String>,
+    pub dedupe_threshold: Option<f32>,
 }
 
 impl Settings {
     pub fn scoring_enabled(&self) -> bool {
         !self.interest_profile.trim().is_empty()
+    }
+
+    /// Below 1.0 there is some similarity that counts as a duplicate; at or above
+    /// it, nothing can ever match and every item stays its own row.
+    pub fn dedupe_enabled(&self) -> bool {
+        self.dedupe_threshold < 1.0
     }
 
     /// Fingerprint of the profile an item was scored against. Stored per item so
@@ -69,6 +87,9 @@ pub async fn load(db: &Db, cfg: &Config) -> rusqlite::Result<Settings> {
             llm_model: get(LLM_MODEL)?
                 .filter(|v| !v.trim().is_empty())
                 .unwrap_or(default_model),
+            dedupe_threshold: get(DEDUPE_THRESHOLD)?
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(DEFAULT_DEDUPE_THRESHOLD),
         })
     })
     .await
@@ -89,6 +110,13 @@ pub async fn save(db: &Db, patch: SettingsPatch) -> rusqlite::Result<()> {
         if let Some(model) = patch.llm_model {
             put.execute((LLM_MODEL, model))?;
         }
+        if let Some(threshold) = patch.dedupe_threshold {
+            // Floored at 0.5 as well as capped: a low threshold would put
+            // unrelated items in one cluster and collapse the list to a few
+            // rows. 1.0 is reachable on purpose — it is how clustering is
+            // turned off.
+            put.execute((DEDUPE_THRESHOLD, threshold.clamp(0.5, 1.0).to_string()))?;
+        }
         Ok(())
     })
     .await
@@ -103,6 +131,7 @@ mod tests {
             interest_profile: profile.into(),
             score_threshold: DEFAULT_SCORE_THRESHOLD,
             llm_model: "m".into(),
+            dedupe_threshold: DEFAULT_DEDUPE_THRESHOLD,
         }
     }
 

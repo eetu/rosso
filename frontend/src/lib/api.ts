@@ -48,6 +48,16 @@ export type Item = {
   starred: boolean;
   /** -1, 0 or 1. Steers future scoring. */
   feedback: number;
+  /** How many items tell this story. `1` when it is not in a cluster. */
+  cluster_size: number;
+};
+
+/** Another report of the same story, listed on the one the list kept. */
+export type Sibling = {
+  id: number;
+  title: string;
+  url: string | null;
+  feed_title: string;
 };
 
 export type Settings = {
@@ -55,6 +65,8 @@ export type Settings = {
   interest_profile: string;
   score_threshold: number;
   llm_model: string;
+  /** Cosine similarity at which two items are the same story. 1 turns it off. */
+  dedupe_threshold: number;
 };
 
 export type SettingsResponse = Settings & {
@@ -63,7 +75,11 @@ export type SettingsResponse = Settings & {
   llm_available: boolean;
 };
 
-export type ItemDetail = Item & { content_html: string | null };
+export type ItemDetail = Item & {
+  content_html: string | null;
+  /** Empty unless this item heads a cluster. */
+  siblings: Sibling[];
+};
 
 export type ItemView = "unread" | "starred" | "interesting" | "all";
 

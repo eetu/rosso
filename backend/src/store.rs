@@ -60,6 +60,19 @@ pub struct Item {
     pub starred: bool,
     /// -1, 0 or 1.
     pub feedback: i64,
+    /// How many items tell this story, this one included. `1` for everything
+    /// that is not in a cluster, so the badge condition is `> 1` rather than a
+    /// null check.
+    pub cluster_size: i64,
+}
+
+/// One of the other reports of the same story.
+#[derive(Debug, Serialize)]
+pub struct Sibling {
+    pub id: i64,
+    pub title: String,
+    pub url: Option<String>,
+    pub feed_title: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -67,6 +80,10 @@ pub struct ItemDetail {
     #[serde(flatten)]
     pub item: Item,
     pub content_html: Option<String>,
+    /// The same story elsewhere. Empty unless this item heads a cluster — which
+    /// is what keeps a collapsed list from losing anything: the rows it hid are
+    /// listed on the one it kept.
+    pub siblings: Vec<Sibling>,
 }
 
 /// The columns the poller needs, and nothing else.
@@ -139,7 +156,8 @@ pub async fn list_feeds(db: &Db) -> rusqlite::Result<Vec<Feed>> {
     db.with(|c| {
         let sql = format!(
             "SELECT {FEED_COLUMNS}, \
-                (SELECT count(*) FROM items i WHERE i.feed_id = f.id AND i.read_at IS NULL) AS unread \
+                (SELECT count(*) FROM items i WHERE i.feed_id = f.id AND i.read_at IS NULL \
+                        AND (i.cluster_id IS NULL OR i.cluster_id = i.id)) AS unread \
              FROM feeds f ORDER BY shown_title COLLATE NOCASE"
         );
         let mut stmt = c.prepare(&sql)?;
@@ -153,7 +171,8 @@ pub async fn get_feed(db: &Db, id: i64) -> rusqlite::Result<Option<Feed>> {
     db.with(move |c| {
         let sql = format!(
             "SELECT {FEED_COLUMNS}, \
-                (SELECT count(*) FROM items i WHERE i.feed_id = f.id AND i.read_at IS NULL) AS unread \
+                (SELECT count(*) FROM items i WHERE i.feed_id = f.id AND i.read_at IS NULL \
+                        AND (i.cluster_id IS NULL OR i.cluster_id = i.id)) AS unread \
              FROM feeds f WHERE f.id = ?1"
         );
         c.query_row(&sql, params![id], feed_from_row).optional()
@@ -410,7 +429,9 @@ fn insert_items_tx(
 const ITEM_COLUMNS: &str = "i.id, i.feed_id, \
      COALESCE(NULLIF(f.custom_title, ''), NULLIF(f.title, ''), f.url) AS feed_title, \
      i.url, i.comments_url, i.title, i.author, i.published_at, i.summary, i.score, \
-     i.score_reason, i.tags_json, i.read_at, i.starred_at, i.feedback";
+     i.score_reason, i.tags_json, i.read_at, i.starred_at, i.feedback, \
+     CASE WHEN i.cluster_id IS NULL THEN 1 ELSE \
+        (SELECT COUNT(*) FROM items s WHERE s.cluster_id = i.cluster_id) END AS cluster_size";
 
 fn item_from_row(row: &Row) -> rusqlite::Result<Item> {
     Ok(Item {
@@ -434,6 +455,7 @@ fn item_from_row(row: &Row) -> rusqlite::Result<Item> {
         read: row.get::<_, Option<String>>("read_at")?.is_some(),
         starred: row.get::<_, Option<String>>("starred_at")?.is_some(),
         feedback: row.get("feedback")?,
+        cluster_size: row.get("cluster_size")?,
     })
 }
 
@@ -519,6 +541,18 @@ pub async fn list_items(db: &Db, query: ItemQuery) -> rusqlite::Result<Vec<Item>
         } else {
             ""
         };
+        // One row per story. A cluster's head carries `cluster_id = id`, so this
+        // is a column comparison rather than a correlated subquery per row.
+        //
+        // Not applied to a search: searching is how you go looking for a
+        // specific thing, and a result set that quietly omitted the report you
+        // were after because a different outlet ran it first would be a bug you
+        // could not see. The list collapses; the search does not.
+        let cluster_clause = if search.is_some() {
+            ""
+        } else {
+            "AND (i.cluster_id IS NULL OR i.cluster_id = i.id)"
+        };
         let paged = supports_cursor(view);
         let (cursor_ts, cursor_id) = if paged {
             split_cursor(query.cursor.as_deref())
@@ -539,6 +573,7 @@ pub async fn list_items(db: &Db, query: ItemQuery) -> rusqlite::Result<Vec<Item>
                AND (:feed_id IS NULL OR i.feed_id = :feed_id)
                {tag_clause}
                {search_clause}
+               {cluster_clause}
                {cursor_clause}
              ORDER BY {order}
              LIMIT :limit"
@@ -572,21 +607,37 @@ pub async fn list_items(db: &Db, query: ItemQuery) -> rusqlite::Result<Vec<Item>
 }
 
 pub async fn get_item(db: &Db, id: i64) -> rusqlite::Result<Option<ItemDetail>> {
-    db.with(move |c| {
-        let sql = format!(
-            "SELECT {ITEM_COLUMNS}, i.content_html
-             FROM items i JOIN feeds f ON f.id = i.feed_id
-             WHERE i.id = ?1"
-        );
-        c.query_row(&sql, params![id], |r| {
-            Ok(ItemDetail {
-                item: item_from_row(r)?,
-                content_html: r.get("content_html")?,
+    let Some((item, content_html)) = db
+        .with(move |c| {
+            let sql = format!(
+                "SELECT {ITEM_COLUMNS}, i.content_html
+                 FROM items i JOIN feeds f ON f.id = i.feed_id
+                 WHERE i.id = ?1"
+            );
+            c.query_row(&sql, params![id], |r| {
+                Ok((
+                    item_from_row(r)?,
+                    r.get::<_, Option<String>>("content_html")?,
+                ))
             })
+            .optional()
         })
-        .optional()
-    })
-    .await
+        .await?
+    else {
+        return Ok(None);
+    };
+
+    // Only ask when there is a cluster to ask about.
+    let siblings = if item.cluster_size > 1 {
+        cluster_siblings(db, id).await?
+    } else {
+        Vec::new()
+    };
+    Ok(Some(ItemDetail {
+        item,
+        content_html,
+        siblings,
+    }))
 }
 
 pub async fn update_item(db: &Db, id: i64, patch: ItemPatch) -> rusqlite::Result<bool> {
@@ -754,6 +805,7 @@ pub async fn list_topics(db: &Db) -> rusqlite::Result<Vec<Topic>> {
             "SELECT json_each.value AS tag, count(*) AS unread
              FROM items i, json_each(i.tags_json)
              WHERE i.read_at IS NULL AND i.tags_json IS NOT NULL
+               AND (i.cluster_id IS NULL OR i.cluster_id = i.id)
              GROUP BY tag
              HAVING unread >= ?1
              ORDER BY unread DESC, tag
@@ -789,6 +841,203 @@ pub struct EnrichCandidate {
     pub feed_title: String,
     pub content_text: Option<String>,
     pub summary: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct EmbedCandidate {
+    pub id: i64,
+    pub title: String,
+    pub content_text: Option<String>,
+}
+
+/// One stored vector, with the cluster its item already belongs to.
+#[derive(Debug)]
+pub struct Neighbour {
+    pub item_id: i64,
+    pub cluster_id: Option<i64>,
+    pub embedding: Vec<u8>,
+}
+
+/// Items with no usable vector: never embedded, or embedded by a different model.
+///
+/// Waits on extraction for the same reason enrichment does — a truncated item
+/// holds the teaser until the article replaces it, and a vector built from a
+/// teaser would cluster on the publisher's boilerplate rather than the story.
+pub async fn due_for_embedding(
+    db: &Db,
+    model: &str,
+    limit: u32,
+) -> rusqlite::Result<Vec<EmbedCandidate>> {
+    let model = model.to_string();
+    db.with(move |c| {
+        let mut stmt = c.prepare(
+            "SELECT i.id, i.title, i.content_text
+             FROM items i
+             LEFT JOIN item_embeddings e ON e.item_id = i.id
+             WHERE i.embed_attempts < :max_attempts
+               AND (e.item_id IS NULL OR e.model IS NOT :model)
+               AND NOT (i.truncated = 1
+                        AND i.extracted = 0
+                        AND i.url IS NOT NULL
+                        AND i.extract_attempts < :max_extract)
+             ORDER BY COALESCE(i.published_at, i.fetched_at) DESC
+             LIMIT :limit",
+        )?;
+        let rows = stmt.query_map(
+            named_params! {
+                ":max_attempts": crate::llm::embed::MAX_ATTEMPTS,
+                ":max_extract": crate::extract::MAX_ATTEMPTS,
+                ":model": model,
+                ":limit": limit,
+            },
+            |r| {
+                Ok(EmbedCandidate {
+                    id: r.get("id")?,
+                    title: r.get("title")?,
+                    content_text: r.get("content_text")?,
+                })
+            },
+        )?;
+        rows.collect()
+    })
+    .await
+}
+
+pub async fn record_embedding(
+    db: &Db,
+    item_id: i64,
+    model: String,
+    dims: usize,
+    embedding: Vec<u8>,
+) -> rusqlite::Result<()> {
+    db.with(move |c| {
+        c.execute(
+            "INSERT INTO item_embeddings (item_id, model, dims, embedding, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(item_id) DO UPDATE SET
+                 model = excluded.model,
+                 dims = excluded.dims,
+                 embedding = excluded.embedding,
+                 created_at = excluded.created_at",
+            params![item_id, model, dims as i64, embedding, now_iso()],
+        )?;
+        // Success retires the counter, or three unlucky failures spread over a
+        // month would retire a healthy item.
+        c.execute(
+            "UPDATE items SET embed_attempts = 0, embed_error = NULL WHERE id = ?1",
+            params![item_id],
+        )?;
+        Ok(())
+    })
+    .await
+}
+
+pub async fn record_embed_failure(db: &Db, item_id: i64, error: String) -> rusqlite::Result<()> {
+    db.with(move |c| {
+        c.execute(
+            "UPDATE items SET embed_attempts = embed_attempts + 1, embed_error = ?2 WHERE id = ?1",
+            params![item_id, error],
+        )?;
+        Ok(())
+    })
+    .await
+}
+
+pub async fn embedding_of(db: &Db, item_id: i64) -> rusqlite::Result<Option<Vec<u8>>> {
+    db.with(move |c| {
+        c.query_row(
+            "SELECT embedding FROM item_embeddings WHERE item_id = ?1",
+            params![item_id],
+            |r| r.get(0),
+        )
+        .optional()
+    })
+    .await
+}
+
+/// Vectors an item could be a duplicate of: same model, published recently, not
+/// the item itself.
+///
+/// Bounded by time rather than by count because that is what the question is —
+/// the same story reported by five outlets arrives within hours, and a match
+/// against something from March is a topic, not a duplicate.
+pub async fn neighbours_within(
+    db: &Db,
+    model: &str,
+    hours: i64,
+    exclude: i64,
+) -> rusqlite::Result<Vec<Neighbour>> {
+    let model = model.to_string();
+    db.with(move |c| {
+        let mut stmt = c.prepare(
+            "SELECT e.item_id, i.cluster_id, e.embedding
+             FROM item_embeddings e JOIN items i ON i.id = e.item_id
+             WHERE e.model = :model
+               AND e.item_id != :exclude
+               AND COALESCE(i.published_at, i.fetched_at) >= :since",
+        )?;
+        let since = (chrono::Utc::now() - chrono::Duration::hours(hours)).to_rfc3339();
+        let rows = stmt.query_map(
+            named_params! { ":model": model, ":exclude": exclude, ":since": since },
+            |r| {
+                Ok(Neighbour {
+                    item_id: r.get("item_id")?,
+                    cluster_id: r.get("cluster_id")?,
+                    embedding: r.get("embedding")?,
+                })
+            },
+        )?;
+        rows.collect()
+    })
+    .await
+}
+
+/// Put `item_id` in `head_id`'s cluster.
+///
+/// A cluster is identified by its head's own id, so the head carries
+/// `cluster_id = id`. That is what lets the list filter to one row per cluster
+/// with a column comparison instead of a correlated subquery per row.
+pub async fn join_cluster(db: &Db, item_id: i64, head_id: i64) -> rusqlite::Result<()> {
+    db.with(move |c| {
+        let tx = c.unchecked_transaction()?;
+        // The head may not have been in a cluster before this second item made
+        // it one.
+        tx.execute(
+            "UPDATE items SET cluster_id = id WHERE id = ?1 AND cluster_id IS NULL",
+            params![head_id],
+        )?;
+        tx.execute(
+            "UPDATE items SET cluster_id = ?2 WHERE id = ?1",
+            params![item_id, head_id],
+        )?;
+        tx.commit()
+    })
+    .await
+}
+
+/// The other items telling the same story, oldest first — the reader's
+/// "also covered by".
+pub async fn cluster_siblings(db: &Db, item_id: i64) -> rusqlite::Result<Vec<Sibling>> {
+    db.with(move |c| {
+        let mut stmt = c.prepare(
+            "SELECT s.id, s.title, s.url,
+                    COALESCE(NULLIF(f.custom_title, ''), NULLIF(f.title, ''), f.url) AS feed_title
+             FROM items s JOIN feeds f ON f.id = s.feed_id
+             WHERE s.cluster_id = (SELECT cluster_id FROM items WHERE id = ?1)
+               AND s.id != ?1
+             ORDER BY COALESCE(s.published_at, s.fetched_at) ASC",
+        )?;
+        let rows = stmt.query_map(params![item_id], |r| {
+            Ok(Sibling {
+                id: r.get("id")?,
+                title: r.get("title")?,
+                url: r.get("url")?,
+                feed_title: r.get("feed_title")?,
+            })
+        })?;
+        rows.collect()
+    })
+    .await
 }
 
 /// A thumb the reader gave, shown back to the model as calibration.

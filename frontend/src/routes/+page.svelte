@@ -2,7 +2,7 @@
   import ArrowLeft from "@lucide/svelte/icons/arrow-left";
   import CheckCheck from "@lucide/svelte/icons/check-check";
   import Menu from "@lucide/svelte/icons/menu";
-  import SlidersHorizontal from "@lucide/svelte/icons/sliders-horizontal";
+  import Settings from "@lucide/svelte/icons/settings";
 
   import { api } from "$lib/api";
   import ItemList from "$lib/components/ItemList.svelte";
@@ -127,7 +127,7 @@
       onclick={() => (settingsOpen = true)}
       aria-label="settings"
     >
-      <SlidersHorizontal size={14} />
+      <Settings size={14} />
     </button>
     <span class="build">
       {#if status.data}

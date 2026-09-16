@@ -180,17 +180,30 @@
     outline-offset: -1px;
   }
 
+  /* `flex-end` lined the two columns up by their bottoms, and a number input and
+     a select are not the same height — so the labels above them sat at
+     different heights. Stretching instead puts both labels on one line and lets
+     the fields settle underneath. */
   .row {
     display: flex;
     gap: 0.75rem;
-    align-items: flex-end;
+    align-items: stretch;
   }
 
   .row span {
     display: flex;
     flex-direction: column;
+    /* The field sits at the bottom of the column whatever the label does, which
+       is what keeps the two inputs aligned with each other. */
+    justify-content: flex-end;
     gap: 0.2rem;
     width: 6rem;
+  }
+
+  /* Both controls end up the same height, so neither column dictates the other. */
+  .row input,
+  .row select {
+    height: 2.1rem;
   }
 
   .row .grow {

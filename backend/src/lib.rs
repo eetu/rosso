@@ -67,7 +67,14 @@ pub async fn run_server() -> anyhow::Result<()> {
         // answers wedges a poll worker forever. Ollama generation gets a longer
         // per-request override at the call site.
         http: reqwest::Client::builder()
-            .user_agent(concat!("rosso/", env!("CARGO_PKG_VERSION")))
+            // The feed-reader convention: a name a publisher can look up, and a
+            // URL saying what it is. A bare `rosso/0.1.0` is indistinguishable
+            // from an unknown scraper to a host deciding whether to serve one.
+            .user_agent(concat!(
+                "rosso/",
+                env!("CARGO_PKG_VERSION"),
+                " (+https://github.com/eetu/rosso)"
+            ))
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(60))
             .build()?,

@@ -5,6 +5,8 @@
   import Settings from "@lucide/svelte/icons/settings";
 
   import { api } from "$lib/api";
+  import DigestList from "$lib/components/DigestList.svelte";
+  import DigestView from "$lib/components/DigestView.svelte";
   import ItemList from "$lib/components/ItemList.svelte";
   import Reader from "$lib/components/Reader.svelte";
   import SearchBox from "$lib/components/SearchBox.svelte";
@@ -32,7 +34,7 @@
    * sidebar that was left open behind it.
    */
   const mobilePane = $derived(
-    reader.open || reader.opening !== null ? "item" : navOpen ? "nav" : "list",
+    reader.detailOpen ? "item" : navOpen ? "nav" : "list",
   );
 
   const markReadLabel = $derived(
@@ -60,11 +62,15 @@
   }
 
   const backLabel = $derived(
-    reader.open ? "back to the list" : navOpen ? "close sources" : "sources",
+    reader.detailOpen
+      ? "back to the list"
+      : navOpen
+        ? "close sources"
+        : "sources",
   );
 
   function back() {
-    if (reader.open || reader.opening !== null) {
+    if (reader.detailOpen) {
       reader.closeItem();
     } else {
       navOpen = !navOpen;
@@ -74,7 +80,9 @@
   const pane = $derived.by(() => {
     if (reader.opening !== null && reader.open?.id !== reader.opening)
       return "loading";
-    return reader.open ? "item" : "list";
+    if (reader.open) return "item";
+    // An item opened from a thread sits on top of the digest, not instead of it.
+    return reader.digestMode && reader.digest ? "digest" : "list";
   });
 
   const selectedIndex = $derived(
@@ -170,14 +178,22 @@
 <main class="showing-{mobilePane}">
   <Sidebar onselect={() => (navOpen = false)} />
   <section class="list" class:with-reader={pane !== "list"}>
-    <SearchBox />
+    {#if !reader.digestMode}
+      <SearchBox />
+    {/if}
     {#if reader.error}
       <p class="error">{reader.error}</p>
     {/if}
-    <ItemList selectedId={reader.open?.id ?? reader.opening} />
+    {#if reader.digestMode}
+      <DigestList />
+    {:else}
+      <ItemList selectedId={reader.open?.id ?? reader.opening} />
+    {/if}
   </section>
   {#if pane === "item" && reader.open}
     <Reader item={reader.open} />
+  {:else if pane === "digest" && reader.digest}
+    <DigestView digest={reader.digest} />
   {:else if pane === "loading"}
     <!-- The wait is the backend fetching and reducing the linked page, which is
          the only time rosso makes the reader wait on anything. -->

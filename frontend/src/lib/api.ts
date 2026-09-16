@@ -67,6 +67,9 @@ export type Settings = {
   llm_model: string;
   /** Cosine similarity at which two items are the same story. 1 turns it off. */
   dedupe_threshold: number;
+  /** UTC hour at which yesterday's digest appears. UTC because the runtime
+   * image is `scratch` and carries no tzdata — see `llm/digest.rs`. */
+  digest_hour: number;
 };
 
 export type SettingsResponse = Settings & {
@@ -112,6 +115,26 @@ export type LiveEvent =
       score_reason: string | null;
       tags: string[];
     };
+
+/** One group of related items in a day's digest. */
+export type DigestThread = {
+  title: string;
+  note: string;
+  /** Ids into the digest's own `items`; the backend drops any it invented. */
+  item_ids: number[];
+};
+
+export type Digest = {
+  /** UTC date, `YYYY-MM-DD`. */
+  day: string;
+  created_at: string;
+  /** How many items the day was built from, not how many are mentioned. */
+  item_count: number;
+  intro: string;
+  threads: DigestThread[];
+  /** Every item the threads refer to, resolved once. */
+  items: Item[];
+};
 
 /** A tag seen often enough to be worth grouping by, with its unread count. */
 export type Topic = {
@@ -207,6 +230,16 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(patch),
     }),
+  digestDays: () =>
+    request<{ days: string[] }>("/api/digests").then((r) => r.days),
+  digest: (day: string) => request<Digest>(`/api/digests/${day}`),
+  /** Write one now instead of waiting for the hour. Omit `day` for yesterday. */
+  makeDigest: (day?: string) =>
+    request<{ day: string; item_count: number }>("/api/digests", {
+      method: "POST",
+      body: JSON.stringify({ day: day ?? null }),
+    }),
+
   /** The whole file's text. Export is a plain link — the browser downloads it. */
   importOpml: (xml: string) =>
     request<{ added: number; skipped: number }>("/api/opml/import", {

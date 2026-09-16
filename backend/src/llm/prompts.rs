@@ -60,6 +60,78 @@ pub fn score_schema() -> serde_json::Value {
     })
 }
 
+pub fn digest_schema() -> serde_json::Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "intro": { "type": "string" },
+            "threads": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "title": { "type": "string" },
+                        "note": { "type": "string" },
+                        "item_ids": { "type": "array", "items": { "type": "integer" } }
+                    },
+                    "required": ["title", "note", "item_ids"]
+                }
+            }
+        },
+        "required": ["intro", "threads"]
+    })
+}
+
+/// System prompt for the daily digest.
+///
+/// Asks for threads rather than a per-item rundown: a list of everything in the
+/// order it was already listed in is the pile, not a digest. The ids come back
+/// with each thread so the reader can link to what is being described — a digest
+/// you then have to go and find the items for is worse than the list.
+pub fn digest_system(profile: &str, day: &str) -> String {
+    let profile = profile.trim();
+    let interests = if profile.is_empty() {
+        String::new()
+    } else {
+        format!("\n\nThe reader's interests, in their own words:\n{profile}")
+    };
+    format!(
+        "You write a short daily digest of what came through someone's feeds on \
+         {day}.{interests}\n\n\
+         Return JSON only.\n\
+         - intro: one sentence on the shape of the day. If it was quiet, say so \
+         plainly rather than inflating it.\n\
+         - threads: group the items that belong together into at most six \
+         threads, most worth their time first. Leave out what is not worth \
+         mentioning — a digest that mentions everything is the list again.\n\
+         - title: what the thread is about, concretely. Name the thing.\n\
+         - note: two or three sentences on what actually happened and why it \
+         matters to them. No preamble, no hedging, no \"this article\".\n\
+         - item_ids: the ids of the items in that thread, from the list given. \
+         Only ids from that list."
+    )
+}
+
+/// The day's candidates, as the model sees them.
+pub fn digest_user(items: &[crate::store::DigestCandidate]) -> String {
+    let mut out = String::from("Items:\n");
+    for item in items {
+        out.push_str(&format!(
+            "\n[{}] {} — {}",
+            item.id,
+            item.title.trim(),
+            item.feed_title.trim()
+        ));
+        if let Some(score) = item.score {
+            out.push_str(&format!(" (score {score})"));
+        }
+        if let Some(summary) = item.summary.as_deref() {
+            out.push_str(&format!("\n    {}", summary.trim()));
+        }
+    }
+    out
+}
+
 /// System prompt for the first pass over an item.
 ///
 /// With no interest profile there is nothing to score against, so the prompt

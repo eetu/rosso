@@ -1592,6 +1592,7 @@ name = "rosso-integration"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "reqwest",
  "rustls",
  "serde_json",

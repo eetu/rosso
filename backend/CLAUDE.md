@@ -13,8 +13,8 @@ api.rs        the /api/* handlers
 events.rs     broadcast channel behind /api/stream (SSE)
 extract.rs    readability full-text: background worker + the on-demand path
 settings.rs   user-editable settings rows; config supplies the defaults
-llm/          ollama client, enrichment worker, embeddings + dedupe, prompts,
-              the health probe
+llm/          ollama client, enrichment worker, embeddings + dedupe, the daily
+              digest, prompts, the health probe
 util.rs       fnv1a — persisted hashes, so never DefaultHasher
 routes.rs     router, /status, SPA fallback handler, CSP layer
 auth.rs       forward-auth extractor (+ the dev_auth bypass)
@@ -72,6 +72,15 @@ shutdown.rs   bounded graceful drain
   list, the feed counts and the topic counts filter to one row per story with a
   column comparison rather than a correlated subquery per row — and why all three
   must carry the same clause or the sidebar will count rows the list never shows.
+- **Days are UTC, and the digest hour says so.** The runtime image is `scratch`
+  and carries no tzdata, so `chrono::Local` resolves to UTC whatever `TZ` is set
+  to. A "local hour" setting that quietly is not one is worse than an honest UTC
+  one; the settings dialog labels it. Shipping tzdata to fix this is a real
+  choice, not an oversight to correct in passing.
+- **A model's item ids are not trustworthy just because the schema said
+  `integer`.** The digest asks for the ids in each thread so the reader can link
+  to them, and `prune` drops the ones that were not in the candidate list. A
+  constrained *type* is not a constrained *value*.
 - **Search does not collapse clusters.** The list hiding a duplicate is the
   feature; a *search* that hid the report you went looking for, because another
   outlet ran it first, is a bug you cannot see from the outside.

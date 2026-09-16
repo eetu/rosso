@@ -15,6 +15,14 @@ pub const INTEREST_PROFILE: &str = "interest_profile";
 pub const SCORE_THRESHOLD: &str = "score_threshold";
 pub const LLM_MODEL: &str = "llm_model";
 pub const DEDUPE_THRESHOLD: &str = "dedupe_threshold";
+pub const DIGEST_HOUR: &str = "digest_hour";
+
+/// The UTC hour at which yesterday's digest appears.
+///
+/// UTC, not local: the runtime image is `scratch` and carries no tzdata, so
+/// `chrono::Local` resolves to UTC whatever `TZ` says. A "local hour" setting
+/// that quietly is not one is worse than an honest UTC one, so the UI labels it.
+pub const DEFAULT_DIGEST_HOUR: i64 = 6;
 
 /// Cosine similarity at which two items are the same story. 0.90 is the plan's
 /// starting point, to be tuned against real data rather than trusted.
@@ -39,6 +47,7 @@ pub struct Settings {
     pub score_threshold: i64,
     pub llm_model: String,
     pub dedupe_threshold: f32,
+    pub digest_hour: i64,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -47,6 +56,7 @@ pub struct SettingsPatch {
     pub score_threshold: Option<i64>,
     pub llm_model: Option<String>,
     pub dedupe_threshold: Option<f32>,
+    pub digest_hour: Option<i64>,
 }
 
 impl Settings {
@@ -90,6 +100,9 @@ pub async fn load(db: &Db, cfg: &Config) -> rusqlite::Result<Settings> {
             dedupe_threshold: get(DEDUPE_THRESHOLD)?
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(DEFAULT_DEDUPE_THRESHOLD),
+            digest_hour: get(DIGEST_HOUR)?
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(DEFAULT_DIGEST_HOUR),
         })
     })
     .await
@@ -117,6 +130,9 @@ pub async fn save(db: &Db, patch: SettingsPatch) -> rusqlite::Result<()> {
             // turned off.
             put.execute((DEDUPE_THRESHOLD, threshold.clamp(0.5, 1.0).to_string()))?;
         }
+        if let Some(hour) = patch.digest_hour {
+            put.execute((DIGEST_HOUR, hour.clamp(0, 23).to_string()))?;
+        }
         Ok(())
     })
     .await
@@ -132,6 +148,7 @@ mod tests {
             score_threshold: DEFAULT_SCORE_THRESHOLD,
             llm_model: "m".into(),
             dedupe_threshold: DEFAULT_DEDUPE_THRESHOLD,
+            digest_hour: DEFAULT_DIGEST_HOUR,
         }
     }
 

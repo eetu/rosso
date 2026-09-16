@@ -33,6 +33,8 @@ pub fn routes() -> Router<AppState> {
         .route("/api/items", get(list_items))
         .route("/api/items/{id}", get(get_item).patch(update_item))
         .route("/api/items/mark-read", post(mark_read))
+        .route("/api/digests", get(list_digests).post(make_digest))
+        .route("/api/digests/{day}", get(get_digest))
         .route("/api/stream", get(stream))
         .route("/api/settings", get(get_settings).put(put_settings))
         .route("/api/topics", get(list_topics))
@@ -261,6 +263,102 @@ async fn export_opml(_: Auth, State(state): State<AppState>) -> AppResult<Respon
         xml,
     )
         .into_response())
+}
+
+#[derive(Serialize)]
+struct DigestDaysResponse {
+    days: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct DigestResponse {
+    day: String,
+    created_at: String,
+    /// How many items the day was built from, not how many are mentioned.
+    item_count: i64,
+    #[serde(flatten)]
+    digest: llm::digest::Digest,
+    /// Every item any thread refers to, resolved once so the SPA can render rows
+    /// rather than asking for each id.
+    items: Vec<Item>,
+}
+
+/// Days that have a digest, newest first.
+async fn list_digests(
+    _: Auth,
+    State(state): State<AppState>,
+) -> AppResult<Json<DigestDaysResponse>> {
+    Ok(Json(DigestDaysResponse {
+        days: store::list_digest_days(&state.db, 60).await?,
+    }))
+}
+
+#[derive(Deserialize)]
+struct MakeDigestRequest {
+    /// A UTC date. Absent means yesterday — the last day that is actually over.
+    day: Option<String>,
+}
+
+/// Write a digest now, rather than waiting for the hour.
+///
+/// Without this the feature cannot be seen until tomorrow, and a prompt that
+/// takes a day to iterate on is a prompt nobody tunes.
+async fn make_digest(
+    _: Auth,
+    State(state): State<AppState>,
+    Json(req): Json<MakeDigestRequest>,
+) -> AppResult<Json<Value>> {
+    let day = req.day.unwrap_or_else(|| {
+        (chrono::Utc::now() - chrono::Duration::days(1))
+            .format("%Y-%m-%d")
+            .to_string()
+    });
+    if !is_iso_date(&day) {
+        return Err(AppError::BadRequest("day must be YYYY-MM-DD".into()));
+    }
+
+    match llm::digest::generate(&state, &day).await {
+        Ok(Some(count)) => Ok(Json(json!({ "day": day, "item_count": count }))),
+        Ok(None) => Err(AppError::BadRequest(format!(
+            "too little arrived on {day} to digest"
+        ))),
+        Err(err) => Err(AppError::BadRequest(err.to_string())),
+    }
+}
+
+async fn get_digest(
+    _: Auth,
+    State(state): State<AppState>,
+    Path(day): Path<String>,
+) -> AppResult<Json<DigestResponse>> {
+    let stored = store::get_digest(&state.db, &day)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    // A digest written by an older shape fails on its own day rather than
+    // anywhere structural — which is why the JSON is parsed here and not at
+    // write time.
+    let digest: llm::digest::Digest = serde_json::from_str(&stored.content)
+        .map_err(|e| AppError::BadRequest(format!("unreadable digest for {day}: {e}")))?;
+
+    let ids: Vec<i64> = digest
+        .threads
+        .iter()
+        .flat_map(|t| t.item_ids.iter().copied())
+        .collect();
+    Ok(Json(DigestResponse {
+        day: stored.day,
+        created_at: stored.created_at,
+        item_count: stored.item_count,
+        items: store::digest_items(&state.db, &ids).await?,
+        digest,
+    }))
+}
+
+/// `YYYY-MM-DD`, checked before it reaches a query. The column is a plain TEXT
+/// key, so a malformed day is a miss rather than a risk — but a 400 says what is
+/// wrong instead of a bare 404.
+fn is_iso_date(day: &str) -> bool {
+    chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d").is_ok()
 }
 
 /// What the background loops are doing, as server-sent events.

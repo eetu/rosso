@@ -55,7 +55,8 @@
         class="view"
         class:active={reader.view === v.id &&
           reader.feedId === null &&
-          reader.tag === null}
+          reader.tag === null &&
+          !reader.digestMode}
         onclick={() => {
           reader.select({ view: v.id, feedId: null, tag: null });
           onselect();
@@ -67,6 +68,21 @@
         {/if}
       </button>
     {/each}
+    <!-- A document rather than a filtered list, which is why it sits apart from
+         the views instead of alongside them. Only offered once there is a model
+         to write one — without it the section is a permanently empty room. -->
+    {#if reader.settings?.llm_available || reader.digestDays.length > 0}
+      <button
+        class="view"
+        class:active={reader.digestMode}
+        onclick={() => {
+          reader.showDigests();
+          onselect();
+        }}
+      >
+        <span>digest</span>
+      </button>
+    {/if}
   </nav>
 
   <!-- Topics are the tags the model already assigns, kept only where enough

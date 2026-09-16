@@ -241,6 +241,22 @@ CREATE TABLE IF NOT EXISTS settings (
 -- records which model wrote it can be re-embedded instead of silently compared
 -- against a different vector space. Vectors are unit-normalized on the way in,
 -- so cosine similarity is a plain dot product.
+-- One digest per UTC day. The day is the key, so regenerating one replaces it
+-- rather than accumulating attempts.
+--
+-- `content` is the model's JSON, not prose or markdown: the same `format:`
+-- schema discipline the rest of the LLM layer uses, which is also what lets a
+-- digest name the item ids it is talking about and the reader turn them into
+-- links. A digest of unlinkable prose would describe items you then have to go
+-- and find.
+CREATE TABLE IF NOT EXISTS digests (
+    day        TEXT PRIMARY KEY,
+    content    TEXT    NOT NULL,
+    model      TEXT    NOT NULL,
+    item_count INTEGER NOT NULL,
+    created_at TEXT    NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS item_embeddings (
     item_id    INTEGER PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE,
     model      TEXT    NOT NULL,

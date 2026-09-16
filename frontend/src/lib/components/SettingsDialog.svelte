@@ -10,6 +10,7 @@
   let profile = $state("");
   let threshold = $state(65);
   let dedupe = $state(0.9);
+  let digestHour = $state(6);
   let model = $state("");
   let saving = $state(false);
   let saved = $state(false);
@@ -23,6 +24,7 @@
       profile = settings.interest_profile;
       threshold = settings.score_threshold;
       dedupe = settings.dedupe_threshold;
+      digestHour = settings.digest_hour;
       model = settings.llm_model;
       seeded = true;
     }
@@ -58,6 +60,7 @@
         interest_profile: profile,
         score_threshold: threshold,
         dedupe_threshold: dedupe,
+        digest_hour: digestHour,
         llm_model: model,
       });
       saved = true;
@@ -141,6 +144,24 @@
       items this alike collapse to one row. the rest are listed on it.
     {/if}
   </p>
+
+  <div class="row">
+    <span>
+      <label for="digest">digest at</label>
+      <input
+        id="digest"
+        type="number"
+        bind:value={digestHour}
+        min="0"
+        max="23"
+      />
+    </span>
+    <!-- UTC, not local: the runtime image carries no tzdata, so a "local hour"
+         would quietly be this one anyway. Better said out loud. -->
+    <span class="grow note">
+      <span class="hint">:00 utc, covering the day before.</span>
+    </span>
+  </div>
 
   <div class="subs">
     <span class="label">subscriptions</span>
@@ -278,6 +299,12 @@
     flex: 1;
     width: auto;
     min-width: 0;
+  }
+
+  /* Sits on the field's baseline rather than the label's. */
+  .row .note {
+    justify-content: flex-end;
+    padding-bottom: 0.55rem;
   }
 
   .hint {

@@ -7,6 +7,7 @@
 
 use std::time::{Duration, Instant};
 
+pub mod digest;
 pub mod embed;
 pub mod enrich;
 pub mod ollama;

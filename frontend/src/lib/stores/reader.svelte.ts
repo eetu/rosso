@@ -4,6 +4,7 @@
 
 import {
   api,
+  type Digest,
   type Feed,
   type Item,
   type ItemDetail,
@@ -32,6 +33,12 @@ let loadingItems = $state(false);
 let error = $state<string | null>(null);
 let settings = $state<SettingsResponse | null>(null);
 let topics = $state<Topic[]>([]);
+// The digest takes over both content panes: the list shows the days, the reader
+// shows the day. It is a document, not a filtered list, so it does not belong in
+// `view` alongside unread and starred.
+let digestMode = $state(false);
+let digestDays = $state<string[]>([]);
+let digest = $state<Digest | null>(null);
 
 function message(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -155,6 +162,19 @@ export const reader = {
   get topics() {
     return topics;
   },
+  get digestMode() {
+    return digestMode;
+  },
+  get digestDays() {
+    return digestDays;
+  },
+  get digest() {
+    return digest;
+  },
+  /** Whether the detail pane has anything in it, whichever mode is on. */
+  get detailOpen() {
+    return open !== null || opening !== null || (digestMode && digest !== null);
+  },
   get loadingItems() {
     return loadingItems;
   },
@@ -235,8 +255,46 @@ export const reader = {
       tag = next.tag;
       if (next.tag !== null) feedId = null;
     }
+    // Choosing anything from the sidebar is leaving the digest.
+    digestMode = false;
     open = null;
     await loadItems();
+  },
+
+  /** Open the digest section, on the most recent day there is. */
+  async showDigests() {
+    digestMode = true;
+    open = null;
+    opening = null;
+    try {
+      digestDays = await api.digestDays();
+      error = null;
+    } catch (e) {
+      error = message(e);
+      return;
+    }
+    const newest = digestDays[0];
+    if (newest && digest?.day !== newest) await this.openDigest(newest);
+  },
+
+  async openDigest(day: string) {
+    try {
+      digest = await api.digest(day);
+      error = null;
+    } catch (e) {
+      error = message(e);
+    }
+  },
+
+  /**
+   * Write one now rather than waiting for the hour. Throws so the button can
+   * report a day that held too little, or a model host that is not answering.
+   */
+  async makeDigest(day?: string) {
+    const made = await api.makeDigest(day);
+    digestDays = await api.digestDays();
+    await this.openDigest(made.day);
+    return made;
   },
 
   /** Debouncing belongs to the box; this runs whatever it is handed. */
@@ -292,9 +350,18 @@ export const reader = {
     }
   },
 
+  /**
+   * The back button. In the digest section it unwinds one step at a time — an
+   * item opened from a thread returns to the digest, and the digest returns to
+   * the list of days, rather than either dropping you straight out.
+   */
   closeItem() {
-    open = null;
-    opening = null;
+    if (open !== null || opening !== null) {
+      open = null;
+      opening = null;
+      return;
+    }
+    if (digestMode) digest = null;
   },
 
   async setRead(id: number, read: boolean) {

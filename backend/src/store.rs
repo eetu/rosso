@@ -750,6 +750,123 @@ pub async fn mark_read(db: &Db, scope: MarkReadScope) -> rusqlite::Result<usize>
     .await
 }
 
+// ------------------------------------------------------------------- digests
+
+/// A candidate for the day's digest, as the model sees it.
+#[derive(Debug)]
+pub struct DigestCandidate {
+    pub id: i64,
+    pub title: String,
+    pub feed_title: String,
+    pub summary: Option<String>,
+    pub score: Option<i64>,
+}
+
+/// One stored digest, JSON still unparsed — the API parses it, so a digest
+/// written by an older shape degrades to an error on one day rather than
+/// failing the boot.
+#[derive(Debug)]
+pub struct StoredDigest {
+    pub day: String,
+    pub content: String,
+    pub item_count: i64,
+    pub created_at: String,
+}
+
+/// What a digest is built from: the day's best, one per story.
+///
+/// Read items count. A digest is a record of the day, not a second inbox — and
+/// by the time it is generated you have read some of what is in it.
+pub async fn digest_candidates(
+    db: &Db,
+    day: &str,
+    limit: u32,
+) -> rusqlite::Result<Vec<DigestCandidate>> {
+    let day = day.to_string();
+    db.with(move |c| {
+        let mut stmt = c.prepare(
+            "SELECT i.id, i.title,
+                    COALESCE(NULLIF(f.custom_title, ''), NULLIF(f.title, ''), f.url) AS feed_title,
+                    i.summary, i.score
+             FROM items i JOIN feeds f ON f.id = i.feed_id
+             WHERE date(COALESCE(i.published_at, i.fetched_at)) = :day
+               AND (i.cluster_id IS NULL OR i.cluster_id = i.id)
+             ORDER BY i.score DESC NULLS LAST,
+                      COALESCE(i.published_at, i.fetched_at) DESC
+             LIMIT :limit",
+        )?;
+        let rows = stmt.query_map(named_params! { ":day": day, ":limit": limit }, |r| {
+            Ok(DigestCandidate {
+                id: r.get("id")?,
+                title: r.get("title")?,
+                feed_title: r.get("feed_title")?,
+                summary: r.get("summary")?,
+                score: r.get("score")?,
+            })
+        })?;
+        rows.collect()
+    })
+    .await
+}
+
+pub async fn record_digest(
+    db: &Db,
+    day: String,
+    content: String,
+    model: String,
+    item_count: usize,
+) -> rusqlite::Result<()> {
+    db.with(move |c| {
+        c.execute(
+            "INSERT INTO digests (day, content, model, item_count, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(day) DO UPDATE SET
+                 content = excluded.content,
+                 model = excluded.model,
+                 item_count = excluded.item_count,
+                 created_at = excluded.created_at",
+            params![day, content, model, item_count as i64, now_iso()],
+        )?;
+        Ok(())
+    })
+    .await
+}
+
+pub async fn get_digest(db: &Db, day: &str) -> rusqlite::Result<Option<StoredDigest>> {
+    let day = day.to_string();
+    db.with(move |c| {
+        c.query_row(
+            "SELECT day, content, item_count, created_at FROM digests WHERE day = ?1",
+            params![day],
+            |r| {
+                Ok(StoredDigest {
+                    day: r.get("day")?,
+                    content: r.get("content")?,
+                    item_count: r.get("item_count")?,
+                    created_at: r.get("created_at")?,
+                })
+            },
+        )
+        .optional()
+    })
+    .await
+}
+
+/// The days that have one, newest first.
+pub async fn list_digest_days(db: &Db, limit: u32) -> rusqlite::Result<Vec<String>> {
+    db.with(move |c| {
+        let mut stmt = c.prepare("SELECT day FROM digests ORDER BY day DESC LIMIT ?1")?;
+        let rows = stmt.query_map(params![limit], |r| r.get(0))?;
+        rows.collect()
+    })
+    .await
+}
+
+/// The items a digest refers to, for the reader to link.
+pub async fn digest_items(db: &Db, ids: &[i64]) -> rusqlite::Result<Vec<Item>> {
+    items_by_id(db, ids).await
+}
+
 // ---------------------------------------------------------------- extraction
 
 /// An item whose feed gave a teaser (or nothing) and that has a page to fetch.

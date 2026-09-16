@@ -90,6 +90,7 @@ pub async fn run_server() -> anyhow::Result<()> {
     extract::spawn(state.clone());
     llm::enrich::spawn(state.clone());
     llm::embed::spawn(state.clone());
+    llm::digest::spawn(state.clone());
 
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     tracing::info!(%bind, "rosso listening");

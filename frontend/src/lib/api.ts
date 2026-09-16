@@ -91,7 +91,11 @@ export type ItemsQuery = {
   limit?: number;
   /** Full-text. Searches the whole archive, so it overrides `view`. */
   q?: string;
+  /** `semantic` searches by meaning, falling back to text if the host is down. */
+  mode?: SearchMode;
 };
+
+export type SearchMode = "text" | "semantic";
 
 /**
  * A push from `/api/stream`. Mirrors the `Event` enum in `backend/src/events.rs`
@@ -179,9 +183,12 @@ export const api = {
       if (value !== undefined) params.set(key, String(value));
     }
     const suffix = params.size > 0 ? `?${params}` : "";
-    return request<{ items: Item[]; next_cursor: string | null }>(
-      `/api/items${suffix}`,
-    );
+    return request<{
+      items: Item[];
+      next_cursor: string | null;
+      /** What actually ran — a semantic search degrades to text silently. */
+      mode: SearchMode | null;
+    }>(`/api/items${suffix}`);
   },
   item: (id: number) => request<ItemDetail>(`/api/items/${id}`),
   updateItem: (

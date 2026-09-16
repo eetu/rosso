@@ -9,6 +9,7 @@ import {
   type ItemDetail,
   type ItemView,
   type LiveEvent,
+  type SearchMode,
   type Settings,
   type SettingsResponse,
   type Topic,
@@ -24,6 +25,9 @@ let view = $state<ItemView>("unread");
 let feedId = $state<number | null>(null);
 let tag = $state<string | null>(null);
 let q = $state("");
+let mode = $state<SearchMode>("text");
+// What the last search actually ran as, which is not always what was asked for.
+let ranAs = $state<SearchMode | null>(null);
 let loadingItems = $state(false);
 let error = $state<string | null>(null);
 let settings = $state<SettingsResponse | null>(null);
@@ -49,8 +53,10 @@ async function loadItems() {
       feed_id: feedId ?? undefined,
       tag: tag ?? undefined,
       q: q || undefined,
+      mode: q ? mode : undefined,
     });
     items = page.items;
+    ranAs = page.mode;
     error = null;
   } catch (e) {
     error = message(e);
@@ -137,6 +143,14 @@ export const reader = {
   },
   get q() {
     return q;
+  },
+  get mode() {
+    return mode;
+  },
+  /** What the last search ran as — `"text"` while `mode` says `"semantic"` is
+   * the model host being asleep, which the box says out loud. */
+  get ranAs() {
+    return ranAs;
   },
   get topics() {
     return topics;
@@ -226,9 +240,11 @@ export const reader = {
   },
 
   /** Debouncing belongs to the box; this runs whatever it is handed. */
-  async search(next: string) {
-    if (next === q) return;
+  async search(next: string, nextMode: SearchMode = mode) {
+    if (next === q && nextMode === mode) return;
     q = next;
+    mode = nextMode;
+    if (!q) ranAs = null;
     open = null;
     await loadItems();
   },

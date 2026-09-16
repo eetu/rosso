@@ -116,6 +116,27 @@ async fn pass(state: &AppState) -> anyhow::Result<usize> {
     Ok(done)
 }
 
+/// Embed one query string, for a search by meaning.
+///
+/// `None` when there is no model host, when it is asleep, or when the call
+/// fails. Every one of those is ordinary, and the caller falls back to the
+/// full-text index rather than failing the search — a reader that stops being
+/// able to search because a LAN box is off is the bug this whole module is
+/// written to avoid.
+pub async fn embed_query(state: &AppState, text: &str) -> Option<Vec<f32>> {
+    let base = state.cfg.ollama_url.as_deref()?;
+    let input = [text.to_string()];
+    let _permit = state.llm_permits.acquire().await;
+    match ollama::embed(&state.http, base, &state.cfg.embed_model, &input).await {
+        Ok(mut vectors) if !vectors.is_empty() => Some(normalize(vectors.remove(0))),
+        Ok(_) => None,
+        Err(err) => {
+            tracing::debug!(err = %err, "query embedding failed; falling back to text search");
+            None
+        }
+    }
+}
+
 /// Find this item's duplicates and join them.
 async fn cluster_one(
     state: &AppState,
@@ -195,6 +216,22 @@ fn similarity(a: &[f32], b: &[f32]) -> f32 {
         return 0.0;
     }
     a.iter().zip(b).map(|(x, y)| x * y).sum()
+}
+
+/// Similarity against a stored blob, without materializing it as a `Vec<f32>`.
+///
+/// The scan calls this once per item in the archive, and the allocation it
+/// avoids is the difference between flat memory and the whole vector set.
+pub fn similarity_blob(query: &[f32], blob: &[u8]) -> f32 {
+    if blob.len() != query.len() * 4 {
+        return 0.0;
+    }
+    blob.as_chunks::<4>()
+        .0
+        .iter()
+        .zip(query)
+        .map(|(bytes, q)| f32::from_le_bytes(*bytes) * q)
+        .sum()
 }
 
 fn to_blob(v: &[f32]) -> Vec<u8> {

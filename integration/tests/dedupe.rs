@@ -212,6 +212,61 @@ async fn two_outlets_on_one_story_collapse_to_a_single_row() {
 
 #[tokio::test]
 #[ignore = "spawns the backend binary"]
+async fn a_search_by_meaning_finds_what_the_words_do_not() {
+    let ollama = stub_ollama().await;
+    let feeds = feeds_server().await;
+    let stack = Stack::start_with_env(&[("ROSSO_OLLAMA_URL", &ollama.uri())])
+        .await
+        .unwrap();
+    stack
+        .post_json(
+            "/api/feeds",
+            json!({ "url": format!("{}/one.xml", feeds.uri()) }),
+        )
+        .await;
+
+    // Waiting on the semantic result *is* waiting for the embedder. Waiting on
+    // the text index instead would prove nothing: FTS is populated by a trigger
+    // at insert, so it answers long before a vector exists.
+    let semantic = wait_for(&stack, "/api/items?q=greenhouse&mode=semantic", |b| {
+        b["items"].as_array().is_some_and(|a| !a.is_empty())
+    })
+    .await;
+    assert_eq!(semantic["mode"], "semantic");
+    assert_eq!(semantic["items"][0]["title"], "Tomatoes under glass");
+    // Ranked, so no cursor: it is a shortlist, like the interesting view.
+    assert!(semantic["next_cursor"].is_null());
+
+    let text = stack.get_json("/api/items?q=greenhouse").await;
+    assert_eq!(text["mode"], "text");
+}
+
+#[tokio::test]
+#[ignore = "spawns the backend binary"]
+async fn a_semantic_search_falls_back_to_the_words_when_the_host_is_asleep() {
+    // The reader never depends on the mini being awake. A search box that
+    // stopped working because a LAN machine is off would be exactly that.
+    let feeds = feeds_server().await;
+    let stack = Stack::start_with_env(&[("ROSSO_OLLAMA_URL", "http://127.0.0.1:1")])
+        .await
+        .unwrap();
+    stack
+        .post_json(
+            "/api/feeds",
+            json!({ "url": format!("{}/one.xml", feeds.uri()) }),
+        )
+        .await;
+
+    let body = stack.get_json("/api/items?q=compost&mode=semantic").await;
+    assert_eq!(
+        body["mode"], "text",
+        "a semantic search with no host must answer from the text index"
+    );
+    assert_eq!(body["items"][0]["title"], "Tomatoes under glass");
+}
+
+#[tokio::test]
+#[ignore = "spawns the backend binary"]
 async fn a_threshold_of_one_leaves_every_item_alone() {
     let ollama = stub_ollama().await;
     let feeds = feeds_server().await;

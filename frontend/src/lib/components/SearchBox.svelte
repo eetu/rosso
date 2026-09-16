@@ -54,6 +54,23 @@
     }}
   />
   {#if value}
+    <!-- Words vs meaning. Semantic needs the model host; when it is asleep the
+         backend answers from the text index and says so, and the label follows
+         what ran rather than what was asked for. -->
+    <button
+      class="mode"
+      class:on={reader.mode === "semantic"}
+      onclick={() =>
+        reader.search(
+          value.trim(),
+          reader.mode === "semantic" ? "text" : "semantic",
+        )}
+      title={reader.mode === "semantic" && reader.ranAs === "text"
+        ? "model host asleep — searched the words instead"
+        : "search by meaning"}
+    >
+      {reader.ranAs === "semantic" ? "meaning" : "words"}
+    </button>
     <button onclick={clear} aria-label="clear search"><X size={14} /></button>
   {/if}
 </div>
@@ -101,5 +118,19 @@
 
   button:hover {
     color: var(--halo-text-main);
+  }
+
+  .mode {
+    flex: none;
+    padding: 0.05rem 0.4rem;
+    border: 1px solid var(--halo-border);
+    border-radius: var(--halo-radius-pill);
+    font-family: var(--halo-font-heading);
+    font-size: 0.68rem;
+  }
+
+  .mode.on {
+    border-color: var(--halo-accent);
+    color: var(--halo-accent);
   }
 </style>

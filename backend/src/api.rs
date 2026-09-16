@@ -108,6 +108,10 @@ struct ItemsResponse {
     items: Vec<Item>,
     /// Pass back as `?cursor=` for the next page; absent on the last page.
     next_cursor: Option<String>,
+    /// Which search actually ran. A semantic search with the model host asleep
+    /// answers from the text index instead of failing, and says so here rather
+    /// than leaving the UI claiming something it did not do.
+    mode: Option<&'static str>,
 }
 
 #[derive(Deserialize)]
@@ -288,6 +292,32 @@ async fn list_items(
     Query(mut query): Query<ItemQuery>,
 ) -> AppResult<Json<ItemsResponse>> {
     let limit = query.limit.unwrap_or(50).clamp(1, 200) as usize;
+
+    // Search by meaning, when asked and when the model host can answer. It falls
+    // through to the text index otherwise rather than failing: the reader never
+    // depends on the mini being awake, and a search box that stops working
+    // because a LAN machine is off would be exactly that dependency.
+    let wants_semantic = query.mode.as_deref() == Some("semantic");
+    if let (true, Some(text)) = (wants_semantic, query.q.as_deref()) {
+        if let Some(vector) = llm::embed::embed_query(&state, text).await {
+            let items = store::semantic_search(
+                &state.db,
+                &state.cfg.embed_model,
+                vector,
+                query.feed_id,
+                limit,
+            )
+            .await?;
+            // Ranked, so there is no cursor — a shortlist, like the interesting
+            // view.
+            return Ok(Json(ItemsResponse {
+                items,
+                next_cursor: None,
+                mode: Some("semantic"),
+            }));
+        }
+    }
+
     // A search spans the archive, so it pages the way `all` does whatever view
     // the sidebar happens to have selected.
     let paged = query.q.is_some() || store::supports_cursor(query.view.as_deref());
@@ -295,12 +325,17 @@ async fn list_items(
     // clients disagreeing about what counts as interesting would be worse than
     // one opinion held server-side.
     query.score_threshold = settings::load(&state.db, &state.cfg).await?.score_threshold;
+    let searching = query.q.is_some();
 
     let items = store::list_items(&state.db, query).await?;
     // A short page is the last page; a full one might not be.
     let next_cursor = (paged && items.len() == limit)
         .then(|| store::cursor_for(items.last().expect("non-empty page")));
-    Ok(Json(ItemsResponse { items, next_cursor }))
+    Ok(Json(ItemsResponse {
+        items,
+        next_cursor,
+        mode: searching.then_some("text"),
+    }))
 }
 
 /// Opening an item extracts it if the feed shipped only a teaser and the worker

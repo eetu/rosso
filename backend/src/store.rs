@@ -113,6 +113,8 @@ pub struct ItemQuery {
     /// Free text. Searches the whole archive rather than the active view — you
     /// search for something you have already read as often as for something new.
     pub q: Option<String>,
+    /// `text` (default) or `semantic`. Only meaningful alongside `q`.
+    pub mode: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -939,6 +941,88 @@ pub async fn record_embed_failure(db: &Db, item_id: i64, error: String) -> rusql
             params![item_id, error],
         )?;
         Ok(())
+    })
+    .await
+}
+
+/// Items ranked by how close their vector is to `query`, best first.
+///
+/// A brute-force scan, which is what this size of archive wants: no index to
+/// keep current, no approximate recall, and the whole thing is one sequential
+/// read. Memory stays flat because the vectors are compared and dropped one row
+/// at a time — only an `(f32, i64)` per item survives the scan, so a 20,000-item
+/// archive costs a few hundred kilobytes rather than the sixty megabytes the
+/// vectors themselves would.
+///
+/// Ranked, so there is no cursor: this is a shortlist by construction, the same
+/// way the interesting view is.
+pub async fn semantic_search(
+    db: &Db,
+    model: &str,
+    query: Vec<f32>,
+    feed_id: Option<i64>,
+    limit: usize,
+) -> rusqlite::Result<Vec<Item>> {
+    let model = model.to_string();
+    let ranked: Vec<i64> = db
+        .with(move |c| {
+            let mut stmt = c.prepare(
+                "SELECT e.item_id, e.embedding
+                 FROM item_embeddings e JOIN items i ON i.id = e.item_id
+                 WHERE e.model = :model AND (:feed_id IS NULL OR i.feed_id = :feed_id)",
+            )?;
+            let mut rows = stmt.query(named_params! { ":model": model, ":feed_id": feed_id })?;
+
+            let mut scored: Vec<(f32, i64)> = Vec::new();
+            while let Some(row) = rows.next()? {
+                let id: i64 = row.get(0)?;
+                let blob: Vec<u8> = row.get(1)?;
+                let score = crate::llm::embed::similarity_blob(&query, &blob);
+                // Everything is somewhat similar to everything; a floor keeps a
+                // search for "sqlite" from also returning the whole archive in
+                // descending order of irrelevance.
+                if score >= SEMANTIC_FLOOR {
+                    scored.push((score, id));
+                }
+            }
+            scored.sort_by(|a, b| b.0.total_cmp(&a.0));
+            Ok(scored.into_iter().take(limit).map(|(_, id)| id).collect())
+        })
+        .await?;
+
+    items_by_id(db, &ranked).await
+}
+
+/// Below this, a match is the vector space being dense rather than the item
+/// being relevant. Tuned to be forgiving — a search by meaning that returns
+/// nothing looks broken, and the ranking already puts the good ones first.
+const SEMANTIC_FLOOR: f32 = 0.55;
+
+/// Fetch items by id, preserving the order of `ids`.
+///
+/// SQLite returns rows in whatever order it likes, and the order here *is* the
+/// answer — losing it would turn a ranking back into a list.
+async fn items_by_id(db: &Db, ids: &[i64]) -> rusqlite::Result<Vec<Item>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let ids = ids.to_vec();
+    db.with(move |c| {
+        let placeholders = vec!["?"; ids.len()].join(",");
+        let sql = format!(
+            "SELECT {ITEM_COLUMNS}
+             FROM items i JOIN feeds f ON f.id = i.feed_id
+             WHERE i.id IN ({placeholders})"
+        );
+        let mut stmt = c.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(ids.iter()), item_from_row)?;
+        let mut found: Vec<Item> = rows.collect::<rusqlite::Result<_>>()?;
+        found.sort_by_key(|item| {
+            ids.iter()
+                .position(|id| *id == item.id)
+                .unwrap_or(usize::MAX)
+        });
+        Ok(found)
     })
     .await
 }

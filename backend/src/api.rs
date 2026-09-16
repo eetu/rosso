@@ -190,7 +190,9 @@ async fn list_items(
     Query(mut query): Query<ItemQuery>,
 ) -> AppResult<Json<ItemsResponse>> {
     let limit = query.limit.unwrap_or(50).clamp(1, 200) as usize;
-    let paged = store::supports_cursor(query.view.as_deref());
+    // A search spans the archive, so it pages the way `all` does whatever view
+    // the sidebar happens to have selected.
+    let paged = query.q.is_some() || store::supports_cursor(query.view.as_deref());
     // The cutoff is a setting, not something the client gets to choose — two
     // clients disagreeing about what counts as interesting would be worse than
     // one opinion held server-side.

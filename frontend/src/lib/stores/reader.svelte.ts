@@ -22,6 +22,7 @@ let opening = $state<number | null>(null);
 let view = $state<ItemView>("unread");
 let feedId = $state<number | null>(null);
 let tag = $state<string | null>(null);
+let q = $state("");
 let loadingItems = $state(false);
 let error = $state<string | null>(null);
 let settings = $state<SettingsResponse | null>(null);
@@ -46,6 +47,7 @@ async function loadItems() {
       view,
       feed_id: feedId ?? undefined,
       tag: tag ?? undefined,
+      q: q || undefined,
     });
     items = page.items;
     error = null;
@@ -95,6 +97,9 @@ export const reader = {
   get tag() {
     return tag;
   },
+  get q() {
+    return q;
+  },
   get topics() {
     return topics;
   },
@@ -143,7 +148,13 @@ export const reader = {
     feedId?: number | null;
     tag?: string | null;
   }) {
-    if (next.view !== undefined) view = next.view;
+    // A search spans the archive, so the view selector does nothing while one is
+    // running — picking a view is how you say you are done searching. A feed or a
+    // topic still narrows a search, so those leave it alone.
+    if (next.view !== undefined) {
+      view = next.view;
+      q = "";
+    }
     if (next.feedId !== undefined) {
       feedId = next.feedId;
       if (next.feedId !== null) tag = null;
@@ -152,6 +163,14 @@ export const reader = {
       tag = next.tag;
       if (next.tag !== null) feedId = null;
     }
+    open = null;
+    await loadItems();
+  },
+
+  /** Debouncing belongs to the box; this runs whatever it is handed. */
+  async search(next: string) {
+    if (next === q) return;
+    q = next;
     open = null;
     await loadItems();
   },

@@ -7,6 +7,7 @@
   import { api } from "$lib/api";
   import ItemList from "$lib/components/ItemList.svelte";
   import Reader from "$lib/components/Reader.svelte";
+  import SearchBox from "$lib/components/SearchBox.svelte";
   import SettingsDialog from "$lib/components/SettingsDialog.svelte";
   import Sidebar from "$lib/components/Sidebar.svelte";
   import Wordmark from "$lib/components/Wordmark.svelte";
@@ -144,6 +145,7 @@
 <main class="showing-{mobilePane}">
   <Sidebar onselect={() => (navOpen = false)} />
   <section class="list" class:with-reader={pane !== "list"}>
+    <SearchBox />
     {#if reader.error}
       <p class="error">{reader.error}</p>
     {/if}

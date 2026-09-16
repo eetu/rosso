@@ -93,6 +93,9 @@ pub struct ItemQuery {
     pub score_threshold: i64,
     /// Narrow to one topic tag.
     pub tag: Option<String>,
+    /// Free text. Searches the whole archive rather than the active view — you
+    /// search for something you have already read as often as for something new.
+    pub q: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -435,9 +438,27 @@ fn item_from_row(row: &Row) -> rusqlite::Result<Item> {
 }
 
 pub async fn list_items(db: &Db, query: ItemQuery) -> rusqlite::Result<Vec<Item>> {
+    // A query the tokenizer empties — `?q=***` — is a search that matches
+    // nothing, not an absent filter. Deciding that here keeps the SQL below from
+    // having to distinguish "no search" from "a search with no terms".
+    let search = match query.q.as_deref().map(str::trim).filter(|q| !q.is_empty()) {
+        Some(raw) => match fts_query(raw) {
+            Some(expr) => Some(expr),
+            None => return Ok(Vec::new()),
+        },
+        None => None,
+    };
+
     db.with(move |c| {
         let limit = query.limit.unwrap_or(50).clamp(1, 200);
-        let view_clause = match query.view.as_deref() {
+        // Searching spans the archive: the view selector picks what is *new* to
+        // you, which is the wrong axis once you are looking for a specific thing.
+        let view = if search.is_some() {
+            Some("all")
+        } else {
+            query.view.as_deref()
+        };
+        let view_clause = match view {
             Some("starred") => "i.starred_at IS NOT NULL",
             Some("all") => "1",
             // Unread and above the bar. An "interesting" view that kept showing
@@ -448,7 +469,7 @@ pub async fn list_items(db: &Db, query: ItemQuery) -> rusqlite::Result<Vec<Item>
         };
         // Best first in the interesting view, newest first everywhere else —
         // sorting the unread list by score would shuffle a feed out of order.
-        let order = if query.view.as_deref() == Some("interesting") {
+        let order = if view == Some("interesting") {
             "i.score DESC, COALESCE(i.published_at, i.fetched_at) DESC, i.id DESC"
         } else {
             "COALESCE(i.published_at, i.fetched_at) DESC, i.id DESC"
@@ -463,7 +484,14 @@ pub async fn list_items(db: &Db, query: ItemQuery) -> rusqlite::Result<Vec<Item>
         } else {
             ""
         };
-        let paged = supports_cursor(query.view.as_deref());
+        // The index stores no copy of the text — the subquery returns rowids,
+        // and the join back to `items` is what the row is built from.
+        let search_clause = if search.is_some() {
+            "AND i.id IN (SELECT rowid FROM items_fts WHERE items_fts MATCH :q)"
+        } else {
+            ""
+        };
+        let paged = supports_cursor(view);
         let (cursor_ts, cursor_id) = if paged {
             split_cursor(query.cursor.as_deref())
         } else {
@@ -482,6 +510,7 @@ pub async fn list_items(db: &Db, query: ItemQuery) -> rusqlite::Result<Vec<Item>
              WHERE {view_clause}
                AND (:feed_id IS NULL OR i.feed_id = :feed_id)
                {tag_clause}
+               {search_clause}
                {cursor_clause}
              ORDER BY {order}
              LIMIT :limit"
@@ -502,6 +531,9 @@ pub async fn list_items(db: &Db, query: ItemQuery) -> rusqlite::Result<Vec<Item>
         }
         if query.tag.is_some() {
             binds.push((":tag", &query.tag));
+        }
+        if search.is_some() {
+            binds.push((":q", &search));
         }
 
         let mut stmt = c.prepare(&sql)?;
@@ -896,6 +928,31 @@ pub fn supports_cursor(view: Option<&str>) -> bool {
     view != Some("interesting")
 }
 
+/// What the user typed, as an FTS5 `MATCH` expression.
+///
+/// Raw input cannot go into `MATCH`. An unbalanced quote, a leading `-`, or the
+/// bare word `NEAR` is a *syntax error*, not a fruitless search, and a search box
+/// that 500s on an apostrophe is worse than one that finds nothing. So the string
+/// is tokenized here and every token re-emitted quoted, which demotes FTS5's
+/// operators to ordinary words. The last token also takes a `*`, so the list
+/// narrows while you are still typing rather than only once you stop.
+///
+/// Returns `None` when nothing survives — the caller treats that as a search that
+/// matched nothing rather than as no search at all.
+fn fts_query(raw: &str) -> Option<String> {
+    let tokens: Vec<&str> = raw
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .collect();
+    let (last, rest) = tokens.split_last()?;
+    let mut expr = String::new();
+    for token in rest {
+        expr.push_str(&format!("\"{token}\" "));
+    }
+    expr.push_str(&format!("\"{last}\"*"));
+    Some(expr)
+}
+
 /// `"<timestamp>|<id>"`, the sort key of the last row the client saw.
 fn split_cursor(cursor: Option<&str>) -> (Option<String>, Option<i64>) {
     let Some((ts, id)) = cursor.and_then(|c| c.split_once('|')) else {
@@ -930,5 +987,38 @@ mod tests {
         assert_eq!(split_cursor(Some("garbage")), (None, None));
         assert_eq!(split_cursor(Some("2026|notanumber")), (None, None));
         assert_eq!(split_cursor(None), (None, None));
+    }
+
+    #[test]
+    fn search_terms_are_quoted_and_the_last_one_is_a_prefix() {
+        assert_eq!(fts_query("rust async").unwrap(), "\"rust\" \"async\"*");
+        assert_eq!(fts_query("borrow").unwrap(), "\"borrow\"*");
+        // Punctuation is a separator, not syntax — none of it reaches FTS5.
+        assert_eq!(fts_query("o'brien").unwrap(), "\"o\" \"brien\"*");
+        assert_eq!(fts_query("  spaced   out ").unwrap(), "\"spaced\" \"out\"*");
+        // FTS5 operators are demoted to words by the quoting.
+        assert_eq!(fts_query("NEAR OR -x").unwrap(), "\"NEAR\" \"OR\" \"x\"*");
+        assert_eq!(fts_query("***"), None);
+        assert_eq!(fts_query(""), None);
+    }
+
+    /// The query has to survive FTS5's parser, which unit-testing the string
+    /// cannot show — only SQLite can say whether it is valid syntax.
+    #[tokio::test]
+    async fn punctuation_does_not_break_the_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::db::Db::open(&dir.path().join("rosso.db")).unwrap();
+        for raw in ["o'brien", "NEAR OR -x", "c++ \"quoted", "rust async"] {
+            let expr = fts_query(raw).unwrap();
+            db.with(move |c| {
+                c.query_row(
+                    "SELECT count(*) FROM items_fts WHERE items_fts MATCH ?1",
+                    params![expr],
+                    |r| r.get::<_, i64>(0),
+                )
+            })
+            .await
+            .unwrap_or_else(|e| panic!("{raw:?} is not a valid MATCH expression: {e}"));
+        }
     }
 }

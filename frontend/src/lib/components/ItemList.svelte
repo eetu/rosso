@@ -43,6 +43,8 @@
     <li class="empty">
       {#if reader.loadingItems}
         loading…
+      {:else if reader.q}
+        nothing matches “{reader.q}”.
       {:else if reader.view === "unread"}
         nothing unread.
       {:else}

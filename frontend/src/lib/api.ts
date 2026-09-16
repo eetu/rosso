@@ -73,6 +73,8 @@ export type ItemsQuery = {
   tag?: string;
   cursor?: string;
   limit?: number;
+  /** Full-text. Searches the whole archive, so it overrides `view`. */
+  q?: string;
 };
 
 /** A tag seen often enough to be worth grouping by, with its unread count. */

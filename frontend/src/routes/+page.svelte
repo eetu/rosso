@@ -19,6 +19,7 @@
   $effect(() => {
     void reader.init();
   });
+  $effect(() => reader.live());
 
   let settingsOpen = $state(false);
   let navOpen = $state(false);

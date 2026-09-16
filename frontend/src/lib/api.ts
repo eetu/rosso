@@ -77,6 +77,22 @@ export type ItemsQuery = {
   q?: string;
 };
 
+/**
+ * A push from `/api/stream`. Mirrors the `Event` enum in `backend/src/events.rs`
+ * — `kind` is the serde tag, the rest are that variant's fields.
+ */
+export type LiveEvent =
+  | { kind: "items-new"; feed_id: number; count: number }
+  | { kind: "feed-updated"; feed_id: number }
+  | {
+      kind: "item-enriched";
+      item_id: number;
+      summary: string | null;
+      score: number | null;
+      score_reason: string | null;
+      tags: string[];
+    };
+
 /** A tag seen often enough to be worth grouping by, with its unread count. */
 export type Topic = {
   tag: string;

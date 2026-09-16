@@ -1,12 +1,18 @@
 //! The `/api/*` surface. Every handler takes `_: Auth`.
 
+use std::convert::Infallible;
+
 use axum::extract::{Path, Query, State};
 use axum::http::header;
-use axum::response::{IntoResponse, Response};
+use axum::response::{sse, IntoResponse, Response, Sse};
 use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use tokio_stream::wrappers::BroadcastStream;
+// `tokio_stream`'s `filter_map` takes a plain closure; the `futures` one wants
+// an async block for a decision that needs no awaiting.
+use tokio_stream::{Stream, StreamExt};
 
 use crate::auth::Auth;
 use crate::error::{AppError, AppResult};
@@ -27,6 +33,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/items", get(list_items))
         .route("/api/items/{id}", get(get_item).patch(update_item))
         .route("/api/items/mark-read", post(mark_read))
+        .route("/api/stream", get(stream))
         .route("/api/settings", get(get_settings).put(put_settings))
         .route("/api/topics", get(list_topics))
 }
@@ -250,6 +257,29 @@ async fn export_opml(_: Auth, State(state): State<AppState>) -> AppResult<Respon
         xml,
     )
         .into_response())
+}
+
+/// What the background loops are doing, as server-sent events.
+///
+/// The stream is a nicety on top of a reader that is already correct without it:
+/// every event it carries is something a reload would show anyway. So a client
+/// that falls behind is dropped forward to the newest event rather than being
+/// waited for, and a dropped connection is the browser's problem — `EventSource`
+/// reconnects on its own.
+async fn stream(
+    _: Auth,
+    State(state): State<AppState>,
+) -> Sse<impl Stream<Item = Result<sse::Event, Infallible>>> {
+    let events = BroadcastStream::new(state.events.subscribe()).filter_map(|event| {
+        // `Err` here is `Lagged`: this client missed some. Skipping is right —
+        // the events that follow carry the current state, and the counts they
+        // move are recomputed server-side rather than accumulated in the tab.
+        let event = event.ok()?;
+        Some(Ok(sse::Event::default().json_data(event).ok()?))
+    });
+    // A reader is idle for hours at a time, and every hop in front of this —
+    // Traefik, oauth2-proxy — will close a connection that says nothing.
+    Sse::new(events).keep_alive(sse::KeepAlive::default())
 }
 
 async fn list_items(

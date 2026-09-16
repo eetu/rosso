@@ -8,6 +8,7 @@ pub mod auth;
 pub mod config;
 pub mod db;
 pub mod error;
+pub mod events;
 pub mod extract;
 pub mod feed;
 pub mod llm;
@@ -32,6 +33,8 @@ pub struct AppState {
     /// Every generation queues behind this. The model host is one machine doing
     /// one thing at a time; the permit count is what makes that true here.
     pub llm_permits: Arc<tokio::sync::Semaphore>,
+    /// What the background loops tell an open tab.
+    pub events: events::Events,
 }
 
 pub async fn run_server() -> anyhow::Result<()> {
@@ -80,6 +83,7 @@ pub async fn run_server() -> anyhow::Result<()> {
             .build()?,
         llm_health: llm::Health::default(),
         llm_permits: llm::enrich::permits(llm_concurrency),
+        events: events::Events::default(),
     };
 
     feed::poller::spawn(state.clone());

@@ -8,6 +8,7 @@ pub mod schedule;
 
 use schedule::PollResult;
 
+use crate::events::Event;
 use crate::store::{self, DueFeed};
 use crate::AppState;
 
@@ -28,6 +29,9 @@ pub async fn poll_feed(state: &AppState, feed: DueFeed) -> PollResult {
             {
                 tracing::error!(feed_id = feed.id, err = ?db_err, "could not record poll failure");
             }
+            // The sidebar shows `last_error`, so a failure is a visible change
+            // even though no item moved.
+            state.events.emit(Event::FeedUpdated { feed_id: feed.id });
             PollResult::Failed
         }
     }
@@ -72,6 +76,15 @@ async fn poll_inner(state: &AppState, feed: &DueFeed) -> anyhow::Result<PollResu
     .await?;
 
     tracing::debug!(feed_id = feed.id, inserted, interval, "polled");
+    // Only when something arrived. A 304 moved `next_fetch_at` and nothing the
+    // reader shows, and 22 feeds checking in on every tick is a stream nobody
+    // wants open.
+    if inserted > 0 {
+        state.events.emit(Event::ItemsNew {
+            feed_id: feed.id,
+            count: inserted,
+        });
+    }
     Ok(if inserted > 0 {
         PollResult::NewItems
     } else {

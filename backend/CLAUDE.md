@@ -10,6 +10,7 @@ config.rs     env → Config; the four contract fields are fixed by the house se
 db.rs         Arc<Mutex<Connection>> wrapper + the declarative schema
 store.rs      every SQL statement, plus the structs the SPA mirrors
 api.rs        the /api/* handlers
+events.rs     broadcast channel behind /api/stream (SSE)
 extract.rs    readability full-text: background worker + the on-demand path
 settings.rs   user-editable settings rows; config supplies the defaults
 llm/          ollama client, enrichment worker, prompts, the health probe
@@ -18,7 +19,8 @@ routes.rs     router, /status, SPA fallback handler, CSP layer
 auth.rs       forward-auth extractor (+ the dev_auth bypass)
 error.rs      AppError → IntoResponse
 feed/         fetch (conditional GET + size cap), parse (feed-rs + sanitize),
-              discover (url → feed url), schedule (adaptive interval), poller
+              discover (url → feed url), schedule (adaptive interval), poller,
+              opml (import/export)
 shutdown.rs   bounded graceful drain
 ```
 
@@ -57,6 +59,14 @@ shutdown.rs   bounded graceful drain
   `ROSSO_EXTRACT_ALLOW_PRIVATE=1` so wiremock's loopback works. Without that flag
   every extraction test would go green by being refused before it reached what it
   was testing — if you add one, check *why* it passes.
+- **The event stream is additive, like the LLM.** Nothing it carries is state
+  the reader cannot get from a reload, nothing is persisted, and no caller checks
+  whether a send reached anyone — a tab with the page closed is the normal case.
+  A change that makes a count correct *only* via the stream is a bug.
+- **Raw input never reaches FTS5 `MATCH`.** An unbalanced quote or a leading `-`
+  is a syntax error, not an empty result, so `fts_query` re-emits every token
+  quoted. A query it empties means "matched nothing", never "no filter" — the
+  distinction is decided before the SQL is built.
 - **Work sets are derived from row state, not pushed onto a queue.** Extraction
   keys off `truncated AND NOT extracted`; enrichment off `enriched_at IS NULL OR
   scored_profile IS NOT <current>`. Editing the interest profile is therefore its

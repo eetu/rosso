@@ -8,7 +8,9 @@
   let { selectedId }: { selectedId: number | null } = $props();
 </script>
 
-<ul>
+<!-- New items arrive at the top, so the store needs to know whether that is
+     where you are looking before it reloads the list under you. -->
+<ul onscroll={(e) => reader.setListAtTop(e.currentTarget.scrollTop < 4)}>
   {#each reader.items as item (item.id)}
     <li>
       <!-- Two lines per row. The summary belongs to the reader pane; on a

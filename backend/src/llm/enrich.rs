@@ -127,7 +127,14 @@ pub async fn enrich_one(
     };
 
     match result {
-        Ok(()) => tracing::debug!(item = candidate.id, kind = ?candidate.kind, "enriched"),
+        Ok(()) => {
+            tracing::debug!(item = candidate.id, kind = ?candidate.kind, "enriched");
+            // A summary that lands while you are looking at the list should
+            // appear there, not on the next reload.
+            if let Ok(Some(event)) = store::enrichment_of(&state.db, candidate.id).await {
+                state.events.emit(event);
+            }
+        }
         Err(err) => {
             tracing::debug!(item = candidate.id, err = %err, "enrichment failed");
             if let Err(db_err) =

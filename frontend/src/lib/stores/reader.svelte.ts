@@ -8,6 +8,7 @@ import {
   type Item,
   type ItemDetail,
   type ItemView,
+  type LiveEvent,
   type Settings,
   type SettingsResponse,
   type Topic,
@@ -75,6 +76,43 @@ async function refreshCounts() {
   await Promise.all([loadFeeds(), loadTopics()]);
 }
 
+let countsTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * The live channel fires once per item, and draining a morning's backlog fires
+ * hundreds in a row. The sidebar only ever needs the number they end on.
+ */
+function refreshCountsSoon() {
+  if (countsTimer) return;
+  countsTimer = setTimeout(() => {
+    countsTimer = null;
+    void refreshCounts();
+  }, 2000);
+}
+
+// Not `$state`: only the live handler reads it, to decide whether reloading the
+// list under the user would yank the page they are reading out from under them.
+let listAtTop = true;
+
+function handle(event: LiveEvent) {
+  if (event.kind === "item-enriched") {
+    const { item_id, ...enriched } = event;
+    items = items.map((i) => (i.id === item_id ? { ...i, ...enriched } : i));
+    if (open?.id === item_id) open = { ...open, ...enriched };
+    // A new score can move an item into the interesting view, and new tags can
+    // create a topic, so the sidebar moves too.
+    refreshCountsSoon();
+    return;
+  }
+  refreshCountsSoon();
+  // New items go at the top, so a reload is only invisible when the top is what
+  // you are looking at and nothing is open behind it. Otherwise the counts move
+  // and the list waits until you next ask for it.
+  if (event.kind === "items-new" && listAtTop && !open && !opening && !q) {
+    void loadItems();
+  }
+}
+
 export const reader = {
   get feeds() {
     return feeds;
@@ -118,6 +156,26 @@ export const reader = {
 
   async init() {
     await Promise.all([refreshCounts(), loadItems(), this.loadSettings()]);
+  },
+
+  /**
+   * Open the live channel. Returns the teardown, so the page can hand it
+   * straight to an effect.
+   *
+   * Everything it carries is something a reload would show anyway — it is how a
+   * tab left open all morning stops being a morning old, not a source of truth.
+   * `EventSource` reconnects on its own, so a dropped connection needs nothing
+   * here; the reconnect's first reload is what recovers whatever was missed.
+   */
+  live() {
+    const source = new EventSource("/api/stream");
+    source.onmessage = (e) => handle(JSON.parse(e.data) as LiveEvent);
+    return () => source.close();
+  },
+
+  /** The list tells the store whether reloading it under the user is safe. */
+  setListAtTop(atTop: boolean) {
+    listAtTop = atTop;
   },
 
   async loadSettings() {

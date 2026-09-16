@@ -437,6 +437,34 @@ fn item_from_row(row: &Row) -> rusqlite::Result<Item> {
     })
 }
 
+/// What the model wrote on one item, for the live event.
+///
+/// Read back rather than passed out of the worker: the summary path and the
+/// rescore path write different subsets of these columns, and a struct assembled
+/// at each write site would be four places to keep in step with the schema.
+pub async fn enrichment_of(db: &Db, id: i64) -> rusqlite::Result<Option<crate::events::Event>> {
+    db.with(move |c| {
+        c.query_row(
+            "SELECT summary, score, score_reason, tags_json FROM items WHERE id = ?1",
+            params![id],
+            |r| {
+                Ok(crate::events::Event::ItemEnriched {
+                    item_id: id,
+                    summary: r.get("summary")?,
+                    score: r.get("score")?,
+                    score_reason: r.get("score_reason")?,
+                    tags: r
+                        .get::<_, Option<String>>("tags_json")?
+                        .and_then(|raw| serde_json::from_str(&raw).ok())
+                        .unwrap_or_default(),
+                })
+            },
+        )
+        .optional()
+    })
+    .await
+}
+
 pub async fn list_items(db: &Db, query: ItemQuery) -> rusqlite::Result<Vec<Item>> {
     // A query the tokenizer empties — `?q=***` — is a search that matches
     // nothing, not an absent filter. Deciding that here keeps the SQL below from

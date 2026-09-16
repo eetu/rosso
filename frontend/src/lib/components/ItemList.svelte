@@ -62,10 +62,21 @@
     list-style: none;
   }
 
+  /* The row's tint is painted here rather than on the button inside it, so it
+     covers the star's column too. Painted on `.row` alone it stopped at the
+     button's edge and left a pale gutter with the star floating in it. */
   li {
     display: flex;
     align-items: flex-start;
     border-bottom: 1px solid var(--halo-border);
+  }
+
+  li:hover {
+    background: var(--halo-bg-light);
+  }
+
+  li:has(.selected) {
+    background: var(--halo-accent-soft);
   }
 
   button {
@@ -84,14 +95,6 @@
     gap: 0.1rem;
     padding: 0.4rem 0.75rem;
     text-align: left;
-  }
-
-  .row:hover {
-    background: var(--halo-bg-light);
-  }
-
-  .selected {
-    background: var(--halo-accent-soft);
   }
 
   .read .title {
@@ -136,13 +139,32 @@
     line-height: 1.3;
   }
 
+  /* Quiet until it has something to say. An empty star on every row competes
+     with the titles for attention, when the thing worth noticing is the handful
+     that are actually starred. */
   .star {
-    padding: 0.55rem 0.5rem;
+    padding: 0.5rem;
     color: var(--halo-text-light);
+    opacity: 0;
+  }
+
+  .star.on,
+  li:hover .star,
+  .star:focus-visible {
+    opacity: 1;
   }
 
   .star.on {
     color: var(--halo-accent);
+  }
+
+  /* Touch has no hover to reveal it, so the empty outline stays visible — just
+     faint. `:not(.on)` because a starred one is never dimmed: it is the whole
+     signal the column exists to carry. */
+  @media (hover: none) {
+    .star:not(.on) {
+      opacity: 0.35;
+    }
   }
 
   .empty {

@@ -453,6 +453,22 @@ mod tests {
     }
 
     #[test]
+    fn an_http_image_and_its_figure_both_survive() {
+        // Two ways this article lost its pictures and kept its captions: the
+        // sanitizer dropping the tag, or the empty-element prune eating a
+        // `<figure>` whose only child is a void element. Neither may happen —
+        // the scheme is the CSP's problem, not this function's.
+        let html = sanitize(
+            "<figure><img src=\"http://example.com/a.jpg\" alt=\"x\">\
+             <figcaption>a caption</figcaption></figure>",
+            None,
+        );
+        assert!(html.contains("<img"), "the image was stripped: {html}");
+        assert!(html.contains("http://example.com/a.jpg"), "{html}");
+        assert!(html.contains("a caption"), "{html}");
+    }
+
+    #[test]
     fn a_short_body_is_flagged_truncated() {
         let feed = parse(RSS.as_bytes(), "https://example.com/feed.xml").unwrap();
         assert!(feed.items[0].truncated);

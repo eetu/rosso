@@ -52,9 +52,17 @@ async fn csp_covers_the_spa_document_and_not_just_the_api() {
     let stack = Stack::start().await.unwrap();
     for route in ["/status", "/", "/feeds/42"] {
         let res = stack.get(route).await;
+        let csp = res
+            .headers()
+            .get("content-security-policy")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_else(|| panic!("no CSP on {route}"));
+        // Without this, every `http://` image in a feed is refused against
+        // `img-src … https:` and the article renders as captions with gaps
+        // above them. Plenty of long-running blogs still write http URLs.
         assert!(
-            res.headers().contains_key("content-security-policy"),
-            "no CSP on {route}"
+            csp.contains("upgrade-insecure-requests"),
+            "CSP on {route} would block a publisher's http images: {csp}"
         );
     }
 }

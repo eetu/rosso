@@ -95,6 +95,15 @@ fn csp_layer(static_dir: &Path) -> SetResponseHeaderLayer<HeaderValue> {
         .map(|hash| format!(" '{hash}'"))
         .collect();
 
+    // `upgrade-insecure-requests` is what makes a publisher's images appear.
+    // Plenty of long-running blogs still write `http://` image URLs in their
+    // feed even when the host serves https perfectly well (os2museum.com is the
+    // one that surfaced this). The CSP is checked against the URL as written, so
+    // `img-src … https:` refuses those outright — and a browser's own
+    // mixed-content auto-upgrade happens too late to save them. This directive
+    // rewrites them to https *before* the check, so the reader shows the article
+    // rather than its captions with gaps above them. Loopback is exempt by
+    // spec, so local development over http is unaffected.
     let csp = format!(
         "default-src 'self'; \
          script-src 'self'{hashes}; \
@@ -107,7 +116,8 @@ fn csp_layer(static_dir: &Path) -> SetResponseHeaderLayer<HeaderValue> {
          frame-ancestors 'none'; \
          base-uri 'self'; \
          object-src 'none'; \
-         form-action 'self'"
+         form-action 'self'; \
+         upgrade-insecure-requests"
     );
 
     let value = HeaderValue::from_str(&csp).unwrap_or_else(|_| {

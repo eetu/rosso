@@ -12,6 +12,30 @@
   import { relativeTime } from "$lib/time";
 
   let { item }: { item: ItemDetail } = $props();
+
+  /** Punctuation and case differ between syndications of one headline. */
+  const normalize = (title: string) =>
+    title
+      .toLowerCase()
+      .replace(/[‘’“”]/g, "'")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  const sameHeadline = (title: string) =>
+    normalize(title) === normalize(item.title);
+
+  /**
+   * "Covered by" is about other outlets reporting a story. When every sibling is
+   * the same article — the usual shape when two feeds from one publisher
+   * overlap — saying that is simply wrong, so it says where instead.
+   */
+  const siblingSummary = $derived.by(() => {
+    const n = item.siblings.length;
+    const plural = n === 1 ? "" : "s";
+    return item.siblings.every((s) => sameHeadline(s.title))
+      ? `also in ${n} other feed${plural}`
+      : `also covered by ${n} other${plural}`;
+  });
 </script>
 
 <article>
@@ -105,19 +129,30 @@
 
   {#if item.siblings.length > 0}
     <!-- The rows the list collapsed into this one. Without them a dedupe that
-         guessed wrong would be a silent deletion. -->
+         guessed wrong would be a silent deletion.
+
+         Two genuinely different cases share this block. Several outlets on one
+         story is the interesting one, and the headlines are worth reading. The
+         same article arriving through two overlapping feeds from one publisher
+         is the dull one — and repeating its headline verbatim under "also
+         covered by" reads like a bug even though nothing is wrong. So a sibling
+         whose title matches shows only where it came from. -->
     <details class="siblings">
-      <summary
-        >also covered by {item.siblings.length} other{item.siblings.length === 1
-          ? ""
-          : "s"}</summary
-      >
+      <summary>{siblingSummary}</summary>
       <ul>
         <!-- eslint-disable svelte/no-navigation-without-resolve -->
         {#each item.siblings as sibling (sibling.id)}
           <li>
             <span class="feed">{sibling.feed_title}</span>
-            {#if sibling.url}
+            {#if sameHeadline(sibling.title)}
+              {#if sibling.url}
+                <a href={sibling.url} target="_blank" rel="noreferrer"
+                  >the same article</a
+                >
+              {:else}
+                <span>the same article</span>
+              {/if}
+            {:else if sibling.url}
               <a href={sibling.url} target="_blank" rel="noreferrer"
                 >{sibling.title}</a
               >

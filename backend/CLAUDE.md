@@ -118,6 +118,12 @@ shutdown.rs   bounded graceful drain
 - **`format` constrains the JSON, not the packaging around it.** gemma on the
   real host prefixes answers with a bare `json` line and no fence. `extract_json`
   takes the outermost braces rather than enumerating wrappers.
+- **A refusal is not a retry.** 401/403/404/410 from an article page retire the
+  item after one attempt instead of spending the budget to hear the same answer
+  twice more; the budget is for a host that is slow or briefly broken. Some
+  publishers sit behind a bot challenge no HTTP client can pass (`cf-mitigated`
+  in the response says so outright) — that is a host declining, and the reader
+  falls back to the feed's own teaser rather than working around it.
 - **Attempt counters reset on success.** They exist to retire something
   permanently broken; left cumulative, three unlucky failures over a month would
   retire a healthy item.

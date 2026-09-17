@@ -116,6 +116,56 @@ async fn a_failing_article_page_does_not_fail_the_request() {
 
 #[tokio::test]
 #[ignore = "spawns the backend binary"]
+async fn a_publisher_that_refuses_us_is_asked_exactly_once() {
+    // madshrimps.be answers 403 from behind a Cloudflare challenge — to any
+    // client, browser user-agent included, and for /robots.txt too. That answer
+    // will be the same in ten minutes, so spending the whole attempt budget to
+    // hear it three times is three requests nobody wanted, the publisher least
+    // of all.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/feed.xml"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw(teaser_feed(&server.uri()), "application/rss+xml"),
+        )
+        .mount(&server)
+        .await;
+    let article = Mock::given(method("GET"))
+        .and(path("/article"))
+        .respond_with(ResponseTemplate::new(403).insert_header("cf-mitigated", "challenge"))
+        .expect(1)
+        .named("the article, fetched once and only once");
+    server.register(article).await;
+
+    let stack = Stack::start_with_env(&[("ROSSO_EXTRACT_ALLOW_PRIVATE", "1")])
+        .await
+        .unwrap();
+    stack
+        .post_json("/api/feeds", json!({ "url": server.uri() + "/feed.xml" }))
+        .await;
+
+    let id = stack.get_json("/api/items").await["items"][0]["id"]
+        .as_i64()
+        .unwrap();
+
+    // Five opens, one fetch. Each open extracts inline for anything still
+    // pending, so a refusal that merely counted an attempt would show up here as
+    // a second and third request — which is exactly what `expect(1)` catches.
+    for _ in 0..5 {
+        let detail = stack.get_json(&format!("/api/items/{id}")).await;
+        // And the item still reads, from whatever the feed gave.
+        assert!(detail["content_html"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("A short teaser"));
+    }
+    // `expect(1)` is asserted when the server drops.
+    drop(server);
+}
+
+#[tokio::test]
+#[ignore = "spawns the backend binary"]
 async fn a_non_html_target_is_refused_before_it_reaches_the_parser() {
     let server = server_with(
         ResponseTemplate::new(200).set_body_raw(vec![0xff, 0xd8, 0xff, 0xe0], "image/jpeg"),
@@ -155,6 +205,11 @@ async fn extraction_can_be_turned_off_entirely() {
 async fn a_page_that_never_parses_is_given_up_on() {
     // Without a cap, an item whose page will never yield an article costs a
     // request every time it is opened and on every pass of the worker, forever.
+    //
+    // The page answers 200 and simply has no article in it, which is the failure
+    // the cap is for: one that might have gone either way and has to be tried to
+    // find out. A refusal — 403, 404 — is not that, and is retired after a
+    // single attempt instead; see the test above.
     let server = MockServer::start().await;
     let feed = teaser_feed(&server.uri());
     Mock::given(method("GET"))
@@ -164,7 +219,10 @@ async fn a_page_that_never_parses_is_given_up_on() {
         .await;
     Mock::given(method("GET"))
         .and(path("/article"))
-        .respond_with(ResponseTemplate::new(404))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            "<html><body><nav><a href=\"/\">home</a></nav></body></html>",
+            "text/html",
+        ))
         .expect(3) // MAX_ATTEMPTS — asserted when the server drops
         .mount(&server)
         .await;

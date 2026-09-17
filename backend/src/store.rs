@@ -1049,12 +1049,29 @@ pub async fn record_extraction(
     .await
 }
 
-pub async fn record_extraction_failure(db: &Db, id: i64, error: String) -> rusqlite::Result<()> {
+/// Record a failed extraction.
+///
+/// `terminal` retires the item outright instead of spending its remaining
+/// attempts. A publisher that answers 403 will answer 403 again in ten minutes,
+/// and a 404 is not going to come back — the attempt budget exists for a slow or
+/// flaky host, not for an answer that already said no.
+pub async fn record_extraction_failure(
+    db: &Db,
+    id: i64,
+    error: String,
+    terminal: bool,
+) -> rusqlite::Result<()> {
     db.with(move |c| {
+        let attempts = if terminal {
+            crate::extract::MAX_ATTEMPTS
+        } else {
+            0 // added to the current count below
+        };
         c.execute(
-            "UPDATE items SET extract_attempts = extract_attempts + 1, extract_error = ?2
+            "UPDATE items
+             SET extract_attempts = MAX(extract_attempts + 1, ?3), extract_error = ?2
              WHERE id = ?1",
-            params![id, error],
+            params![id, error, attempts],
         )?;
         Ok(())
     })

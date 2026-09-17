@@ -47,12 +47,63 @@ pub struct Extracted {
     pub text: String,
 }
 
+/// An answer that will not change by being asked again.
+///
+/// The attempt budget exists for a host that is slow or briefly broken. A
+/// publisher that answers 403 will answer 403 in ten minutes too, and a 404 is
+/// not coming back — spending three fetches to confirm it is three requests
+/// nobody wanted, including the publisher.
+///
+/// Worth naming rather than folding into a generic failure because the reader's
+/// own log is where this gets read, and "the publisher requires a browser" and
+/// "we broke something" want telling apart at a glance.
+#[derive(Debug)]
+pub struct Refused {
+    status: reqwest::StatusCode,
+    /// Cloudflare says so outright, and it is the difference between a site that
+    /// blocked us and a site behind a challenge no HTTP client can pass.
+    challenge: bool,
+}
+
+impl Refused {
+    fn from(res: &reqwest::Response) -> Option<Self> {
+        use reqwest::StatusCode as S;
+        let status = res.status();
+        matches!(
+            status,
+            S::UNAUTHORIZED | S::FORBIDDEN | S::NOT_FOUND | S::GONE
+        )
+        .then(|| Self {
+            status,
+            challenge: res.headers().contains_key("cf-mitigated"),
+        })
+    }
+}
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let what = match self.status.as_u16() {
+            401 | 403 if self.challenge => "the publisher sits behind a bot challenge",
+            401 | 403 => "the publisher refuses automated fetches",
+            404 | 410 => "the page is gone",
+            _ => "refused",
+        };
+        write!(f, "{what} ({})", self.status.as_u16())
+    }
+}
+
+impl std::error::Error for Refused {}
+
 /// Fetch `url` and reduce it to the article.
 pub async fn extract(http: &Client, url: &str, allow_private: bool) -> anyhow::Result<Extracted> {
     if !allow_private {
         refuse_internal(url).await?;
     }
-    let res = http.get(url).send().await?.error_for_status()?;
+    let res = http.get(url).send().await?;
+    if let Some(refusal) = Refused::from(&res) {
+        return Err(refusal.into());
+    }
+    let res = res.error_for_status()?;
 
     // A PDF or an image would otherwise be fed to an HTML parser as bytes.
     let content_type = res
@@ -181,9 +232,17 @@ pub async fn run_one(state: &AppState, pending: &PendingExtraction) {
             }
         }
         Err(err) => {
-            tracing::debug!(item = pending.id, url = %pending.url, err = %err, "extraction failed");
+            // A refusal is not a fault of ours and not worth retrying, so it is
+            // recorded once and the item is retired rather than costing the
+            // publisher two more requests to hear the same answer.
+            let terminal = err.downcast_ref::<Refused>().is_some();
+            tracing::debug!(
+                item = pending.id, url = %pending.url, err = %err, terminal,
+                "extraction failed"
+            );
             if let Err(db_err) =
-                store::record_extraction_failure(&state.db, pending.id, err.to_string()).await
+                store::record_extraction_failure(&state.db, pending.id, err.to_string(), terminal)
+                    .await
             {
                 tracing::error!(item = pending.id, err = ?db_err, "could not record failure");
             }

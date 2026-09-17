@@ -13,6 +13,16 @@ pub const MIN_INTERVAL_S: u64 = 900; // 15 min
 pub const DEFAULT_INTERVAL_S: u64 = 1800; // 30 min
 pub const MAX_INTERVAL_S: u64 = 21_600; // 6 h
 
+/// The ceiling on a publisher's *own* request, which is allowed past
+/// `MAX_INTERVAL_S`.
+///
+/// Our ceiling exists so a quiet feed stops costing polls; it is our guess about
+/// a feed nobody told us anything about. A `ttl` is the publisher telling us, and
+/// clamping that down to six hours meant a feed asking for twelve was polled
+/// twice as often as it asked — while the code claimed to never undercut a ttl.
+/// This is only a guard against a `ttl` so large it silently retires the feed.
+pub const MAX_PUBLISHER_INTERVAL_S: u64 = 7 * 24 * 3600; // 7 days
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PollResult {
     /// The feed had entries we had not seen.
@@ -43,8 +53,11 @@ pub fn next_interval(
         PollResult::Unchanged => (current * 3 / 2).min(MAX_INTERVAL_S),
     };
 
+    // Our own bounds first, then the publisher's floor — which may exceed them,
+    // because it is the one number here that is not a guess.
+    let ours = base.clamp(MIN_INTERVAL_S, MAX_INTERVAL_S);
     let floor = ttl_minutes.map_or(0, |m| u64::from(m) * 60);
-    base.max(floor).clamp(MIN_INTERVAL_S, MAX_INTERVAL_S)
+    ours.max(floor).min(MAX_PUBLISHER_INTERVAL_S)
 }
 
 /// `base` ± up to 10%, so a batch of feeds added together does not stay in
@@ -100,10 +113,18 @@ mod tests {
             next_interval(1800, PollResult::NewItems, 0, Some(120)),
             7200
         );
-        // But a ttl cannot push us past the ceiling either.
+        // A ttl *may* push us past our own ceiling: it is the publisher saying
+        // so, not our guess about a feed that told us nothing. Clamping it to six
+        // hours polled a feed asking for a week 28 times as often as it asked.
         assert_eq!(
             next_interval(1800, PollResult::NewItems, 0, Some(10_000)),
-            MAX_INTERVAL_S
+            600_000
+        );
+        // Only an absurd one is capped, and only so it cannot silently retire a
+        // feed.
+        assert_eq!(
+            next_interval(1800, PollResult::NewItems, 0, Some(1_000_000)),
+            MAX_PUBLISHER_INTERVAL_S
         );
     }
 

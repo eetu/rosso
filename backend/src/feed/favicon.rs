@@ -71,7 +71,14 @@ async fn pass(state: &AppState) -> anyhow::Result<usize> {
         return Ok(0);
     };
 
-    match fetch_icon(&state.http, &feed.site_url, state.cfg.extract_allow_private).await {
+    match fetch_icon(
+        &state.http,
+        &feed.site_url,
+        feed.icon_url.as_deref(),
+        state.cfg.extract_allow_private,
+    )
+    .await
+    {
         Ok(data_uri) => {
             store::record_icon(&state.db, feed.id, Some(data_uri)).await?;
             tracing::debug!(feed_id = feed.id, "icon stored");
@@ -88,12 +95,16 @@ async fn pass(state: &AppState) -> anyhow::Result<usize> {
 pub async fn fetch_icon(
     http: &Client,
     site_url: &str,
+    declared: Option<&str>,
     allow_private: bool,
 ) -> anyhow::Result<String> {
     let site = Url::parse(site_url)?;
     let mut candidates: Vec<Url> = Vec::new();
 
-    // What the page declares, then the path every browser tries anyway.
+    // What the feed itself declared comes first — the publisher named it, so it
+    // beats anything guessed from the page — then what the page declares, then
+    // the path every browser tries anyway.
+    candidates.extend(declared.and_then(|d| site.join(d).ok()));
     if let Ok(html) = get_text(http, site.as_str(), allow_private).await {
         candidates.extend(icon_links(&html).iter().filter_map(|h| site.join(h).ok()));
     }

@@ -120,6 +120,36 @@ export type LiveEvent =
       tags: string[];
     };
 
+/** What a feed asked for, and what rosso is doing about it. */
+export type FeedInspection = {
+  id: number;
+  title: string;
+  url: string;
+  /** Current poll interval, after the adaptive schedule. */
+  interval_s: number;
+  last_fetch_at: string | null;
+  next_fetch_at: string;
+  /** The publisher's own `ttl`, in minutes, when the feed states one. */
+  ttl_minutes: number | null;
+  /** The last `Retry-After` a server asked for, in seconds. */
+  retry_after_s: number | null;
+  /** Whether rosso holds a validator, so a poll costs a 304 not a body. */
+  conditional: boolean;
+  failures: number;
+  /** Consecutive refusals; at `max_refusals` the feed retires itself. */
+  refusals: number;
+  disabled: boolean;
+  last_error: string | null;
+  llm_enabled: boolean;
+};
+
+export type Inspection = {
+  feeds: FeedInspection[];
+  min_interval_s: number;
+  max_interval_s: number;
+  max_refusals: number;
+};
+
 /** One group of related items in a day's digest. */
 export type DigestThread = {
   title: string;
@@ -199,7 +229,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ url }),
     }),
-  updateFeed: (id: number, patch: { llm_enabled?: boolean }) =>
+  inspectFeeds: () => request<Inspection>("/api/feeds/inspect"),
+  updateFeed: (
+    id: number,
+    patch: { llm_enabled?: boolean; disabled?: boolean },
+  ) =>
     request<Feed>(`/api/feeds/${id}`, {
       method: "PATCH",
       body: JSON.stringify(patch),

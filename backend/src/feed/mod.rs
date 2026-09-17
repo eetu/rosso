@@ -24,9 +24,16 @@ pub async fn poll_feed(state: &AppState, feed: DueFeed) -> PollResult {
         Err(err) => {
             let failures = feed.failures + 1;
             let next = schedule::next_interval(feed.interval_s, PollResult::Failed, failures, None);
-            tracing::warn!(feed_id = feed.id, url = %feed.url, failures, err = %err, "poll failed");
+            // A refusal is not a feed that is down, and the backoff curve has
+            // nothing to offer it: 403 will be 403 next week. Counted separately
+            // so a run of them retires the feed instead of asking forever.
+            let refused = err.downcast_ref::<fetch::FeedRefused>().is_some();
+            tracing::warn!(
+                feed_id = feed.id, url = %feed.url, failures, refused, err = %err,
+                "poll failed"
+            );
             if let Err(db_err) =
-                store::record_failure(&state.db, feed.id, err.to_string(), next).await
+                store::record_failure(&state.db, feed.id, err.to_string(), next, refused).await
             {
                 tracing::error!(feed_id = feed.id, err = ?db_err, "could not record poll failure");
             }
@@ -53,6 +60,16 @@ async fn poll_inner(state: &AppState, feed: &DueFeed) -> anyhow::Result<PollResu
             let next = schedule::next_interval(feed.interval_s, PollResult::Unchanged, 0, None);
             store::record_unchanged(&state.db, feed.id, next).await?;
             tracing::debug!(feed_id = feed.id, "not modified");
+            return Ok(PollResult::Unchanged);
+        }
+        // The server named a wait. It knows something our backoff curve does
+        // not, so it is used as given rather than merged with ours — and it is
+        // never a failure, so it does not count toward the backoff or toward
+        // retiring the feed.
+        fetch::Fetched::RetryAfter(wait) => {
+            let secs = wait.as_secs().min(schedule::MAX_PUBLISHER_INTERVAL_S);
+            store::record_retry_after(&state.db, feed.id, secs).await?;
+            tracing::info!(feed_id = feed.id, url = %feed.url, secs, "server asked us to wait");
             return Ok(PollResult::Unchanged);
         }
         fetch::Fetched::Body {

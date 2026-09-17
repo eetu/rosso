@@ -15,30 +15,39 @@ use super::parse::{self, ParsedFeed};
 pub struct Discovered {
     pub feed_url: String,
     pub parsed: ParsedFeed,
+    /// The validators this very response carried. Kept because subscribing
+    /// already paid for the fetch — dropping them meant the first scheduled poll
+    /// re-downloaded the whole document to learn what we had just been told.
+    pub etag: Option<String>,
+    pub last_modified: Option<String>,
 }
 
 pub async fn discover(http: &Client, input: &str, max_bytes: usize) -> anyhow::Result<Discovered> {
     let start = normalize(input)?;
-    let body = get_text(http, start.as_str(), max_bytes).await?;
+    let fetched = get_text(http, start.as_str(), max_bytes).await?;
 
-    if let Ok(parsed) = parse::parse(body.as_bytes(), start.as_str()) {
+    if let Ok(parsed) = parse::parse(fetched.body.as_bytes(), start.as_str()) {
         return Ok(Discovered {
             feed_url: start.to_string(),
             parsed,
+            etag: fetched.etag,
+            last_modified: fetched.last_modified,
         });
     }
 
-    for href in feed_links(&body) {
+    for href in feed_links(&fetched.body) {
         let Ok(candidate) = start.join(&href) else {
             continue;
         };
-        let Ok(body) = get_text(http, candidate.as_str(), max_bytes).await else {
+        let Ok(fetched) = get_text(http, candidate.as_str(), max_bytes).await else {
             continue;
         };
-        if let Ok(parsed) = parse::parse(body.as_bytes(), candidate.as_str()) {
+        if let Ok(parsed) = parse::parse(fetched.body.as_bytes(), candidate.as_str()) {
             return Ok(Discovered {
                 feed_url: candidate.to_string(),
                 parsed,
+                etag: fetched.etag,
+                last_modified: fetched.last_modified,
             });
         }
     }
@@ -64,10 +73,28 @@ fn normalize(input: &str) -> anyhow::Result<Url> {
     }
 }
 
-async fn get_text(http: &Client, url: &str, max_bytes: usize) -> anyhow::Result<String> {
+struct Fetched {
+    body: String,
+    etag: Option<String>,
+    last_modified: Option<String>,
+}
+
+async fn get_text(http: &Client, url: &str, max_bytes: usize) -> anyhow::Result<Fetched> {
     let res = http.get(url).send().await?.error_for_status()?;
+    let header = |name: reqwest::header::HeaderName| {
+        res.headers()
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string)
+    };
+    let etag = header(reqwest::header::ETAG);
+    let last_modified = header(reqwest::header::LAST_MODIFIED);
     let bytes = read_capped(res, max_bytes).await?;
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
+    Ok(Fetched {
+        body: String::from_utf8_lossy(&bytes).into_owned(),
+        etag,
+        last_modified,
+    })
 }
 
 /// Hrefs of the `<link rel="alternate">` tags that point at a feed, in document

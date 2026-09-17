@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Info from "@lucide/svelte/icons/info";
   import RotateCw from "@lucide/svelte/icons/rotate-cw";
   import Sparkles from "@lucide/svelte/icons/sparkles";
   import Trash2 from "@lucide/svelte/icons/trash-2";
@@ -6,6 +7,7 @@
 
   import type { ItemView } from "$lib/api";
   import AddFeed from "$lib/components/AddFeed.svelte";
+  import FeedInspector from "$lib/components/FeedInspector.svelte";
   import { reader } from "$lib/stores/reader.svelte";
 
   // On a phone the sidebar *is* the screen, so choosing something has to hand
@@ -28,6 +30,7 @@
   );
 
   let busyFeed = $state<number | null>(null);
+  let inspecting = $state(false);
 
   async function refresh(id: number) {
     busyFeed = id;
@@ -112,7 +115,14 @@
     </ul>
   {/if}
 
-  <h2>feeds</h2>
+  <h2 class="heading">
+    feeds
+    <!-- How often each is polled, and whether what the publisher asked for is
+         being honoured. -->
+    <button onclick={() => (inspecting = true)} aria-label="inspect feeds">
+      <Info size={13} />
+    </button>
+  </h2>
 
   <ul>
     {#each reader.feeds as feed (feed.id)}
@@ -181,6 +191,10 @@
   <div class="add"><AddFeed /></div>
 </aside>
 
+{#if inspecting}
+  <FeedInspector onclose={() => (inspecting = false)} />
+{/if}
+
 <style>
   aside {
     display: flex;
@@ -207,6 +221,27 @@
     letter-spacing: 0.08em;
     text-transform: uppercase;
     color: var(--halo-text-muted);
+  }
+
+  .heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+
+  .heading button {
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--halo-text-light);
+    cursor: pointer;
+  }
+
+  .heading button:hover {
+    color: var(--halo-text-main);
   }
 
   ul {

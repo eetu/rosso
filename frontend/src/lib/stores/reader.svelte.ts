@@ -314,6 +314,11 @@ export const reader = {
     return feed;
   },
 
+  /** After the inspector re-enables a feed, so the sidebar agrees with it. */
+  async reloadFeeds() {
+    await refreshCounts();
+  },
+
   /** Throws like `addFeed`, so the dialog can report a file it made nothing of. */
   async importOpml(xml: string) {
     const result = await api.importOpml(xml);

@@ -118,6 +118,20 @@ shutdown.rs   bounded graceful drain
 - **`format` constrains the JSON, not the packaging around it.** gemma on the
   real host prefixes answers with a bare `json` line and no fence. `extract_json`
   takes the outermost braces rather than enumerating wrappers.
+- **`Retry-After` wins over our schedule, and is not a failure.** A server that
+  names a wait knows something the backoff curve does not, so it is used as
+  given — and it leaves `failures` and `refusals` untouched, or a busy host
+  asking us to come back in an hour would also be pushed toward being retired.
+- **Our interval ceiling is a guess; a publisher's `ttl` is not.** `MAX_INTERVAL_S`
+  bounds what *we* pick for a feed that told us nothing. A `ttl` may exceed it —
+  clamping it meant a feed asking for twelve hours was polled twice as often as
+  it asked, while the code claimed never to undercut a ttl. Only
+  `MAX_PUBLISHER_INTERVAL_S` bounds it, and only so a nonsense value cannot
+  silently retire a feed.
+- **`feeds.icon` holds bytes; `feeds.icon_url` holds what a feed declared.**
+  Both `insert_feed` and `record_success` once wrote the declared URL into
+  `icon`, which the sidebar renders directly — the third-party request the
+  favicon worker exists to avoid. The URL is a download candidate, never markup.
 - **A refusal is not a retry.** 401/403/404/410 from an article page retire the
   item after one attempt instead of spending the budget to hear the same answer
   twice more; the budget is for a host that is slow or briefly broken. Some

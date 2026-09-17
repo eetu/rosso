@@ -201,8 +201,10 @@ pub async fn insert_feed(
     db.with(move |c| {
         let now = now_iso();
         let changed = c.execute(
+            // `icon_url`, never `icon`: what a feed declares is a URL, and the
+            // column the sidebar renders holds only bytes we fetched ourselves.
             "INSERT OR IGNORE INTO feeds
-                (url, title, site_url, icon, folder_id, next_fetch_at, created_at)
+                (url, title, site_url, icon_url, folder_id, next_fetch_at, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
             params![
                 url,
@@ -238,9 +240,17 @@ pub async fn update_feed(db: &Db, id: i64, patch: FeedPatch) -> rusqlite::Result
             )?;
         }
         if let Some(disabled) = patch.disabled {
+            // Re-enabling clears the refusal count and the backoff, or a feed
+            // retired for refusing us would retire again on its very next poll
+            // and the button would look broken.
             changed += c.execute(
-                "UPDATE feeds SET disabled = ?2 WHERE id = ?1",
-                params![id, i64::from(disabled)],
+                "UPDATE feeds
+                 SET disabled = ?2,
+                     refusals = CASE WHEN ?2 = 0 THEN 0 ELSE refusals END,
+                     failures = CASE WHEN ?2 = 0 THEN 0 ELSE failures END,
+                     next_fetch_at = CASE WHEN ?2 = 0 THEN ?3 ELSE next_fetch_at END
+                 WHERE id = ?1",
+                params![id, i64::from(disabled), now_iso()],
             )?;
         }
         if let Some(llm_enabled) = patch.llm_enabled {
@@ -259,11 +269,75 @@ pub async fn update_feed(db: &Db, id: i64, patch: FeedPatch) -> rusqlite::Result
     .await
 }
 
+/// What a feed asked for and what rosso is actually doing about it.
+///
+/// Its own query rather than more columns on `Feed`: the sidebar fetches that
+/// list constantly and needs none of this, and the question this answers — "am I
+/// being a good citizen to this publisher?" — is one you ask deliberately.
+#[derive(Debug, Serialize)]
+pub struct FeedInspection {
+    pub id: i64,
+    pub title: String,
+    pub url: String,
+    /// How often rosso polls it now, after the adaptive schedule.
+    pub interval_s: i64,
+    pub last_fetch_at: Option<String>,
+    pub next_fetch_at: String,
+    /// The publisher's own `ttl`, in minutes, when the feed states one.
+    pub ttl_minutes: Option<i64>,
+    /// The last `Retry-After` a server asked for, in seconds.
+    pub retry_after_s: Option<i64>,
+    /// Whether rosso holds a validator, so polls cost a 304 rather than a body.
+    pub conditional: bool,
+    pub failures: i64,
+    /// Consecutive refusals. At `MAX_REFUSALS` the feed retires itself.
+    pub refusals: i64,
+    pub disabled: bool,
+    pub last_error: Option<String>,
+    pub llm_enabled: bool,
+}
+
+pub async fn inspect_feeds(db: &Db) -> rusqlite::Result<Vec<FeedInspection>> {
+    db.with(|c| {
+        let mut stmt = c.prepare(
+            "SELECT id, url,
+                    COALESCE(NULLIF(custom_title, ''), NULLIF(title, ''), url) AS shown_title,
+                    interval_s, last_fetch_at, next_fetch_at, ttl_minutes, retry_after_s,
+                    (etag IS NOT NULL OR last_modified IS NOT NULL) AS conditional,
+                    failures, refusals, disabled, last_error, llm_enabled
+             FROM feeds ORDER BY shown_title COLLATE NOCASE",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(FeedInspection {
+                id: r.get("id")?,
+                title: r.get("shown_title")?,
+                url: r.get("url")?,
+                interval_s: r.get("interval_s")?,
+                last_fetch_at: r.get("last_fetch_at")?,
+                next_fetch_at: r.get("next_fetch_at")?,
+                ttl_minutes: r.get("ttl_minutes")?,
+                retry_after_s: r.get("retry_after_s")?,
+                conditional: r.get::<_, i64>("conditional")? != 0,
+                failures: r.get("failures")?,
+                refusals: r.get("refusals")?,
+                disabled: r.get::<_, i64>("disabled")? != 0,
+                last_error: r.get("last_error")?,
+                llm_enabled: r.get::<_, i64>("llm_enabled")? != 0,
+            })
+        })?;
+        rows.collect()
+    })
+    .await
+}
+
 /// A feed whose site has not had its icon fetched yet.
 #[derive(Debug)]
 pub struct IconCandidate {
     pub id: i64,
     pub site_url: String,
+    /// What the feed itself declared, if anything — the best candidate, since
+    /// the publisher named it.
+    pub icon_url: Option<String>,
 }
 
 /// One feed at a time: icons are decoration, and a burst of requests to twenty
@@ -271,7 +345,7 @@ pub struct IconCandidate {
 pub async fn feed_needing_icon(db: &Db) -> rusqlite::Result<Option<IconCandidate>> {
     db.with(|c| {
         c.query_row(
-            "SELECT id, site_url FROM feeds
+            "SELECT id, site_url, icon_url FROM feeds
              WHERE icon IS NULL AND site_url IS NOT NULL AND icon_attempts < ?1
              ORDER BY id LIMIT 1",
             params![crate::feed::favicon::MAX_ATTEMPTS],
@@ -279,6 +353,7 @@ pub async fn feed_needing_icon(db: &Db) -> rusqlite::Result<Option<IconCandidate
                 Ok(IconCandidate {
                     id: r.get("id")?,
                     site_url: r.get("site_url")?,
+                    icon_url: r.get("icon_url")?,
                 })
             },
         )
@@ -385,16 +460,23 @@ pub async fn record_success(
         let next_fetch_at = schedule_at(next_interval_s);
 
         tx.execute(
+            // `icon_url` and not `icon`: the feed declares a URL, and `icon`
+            // holds the bytes the favicon worker fetched. Writing a publisher's
+            // URL there would put it straight into an <img> in the sidebar,
+            // which is the third-party request that worker exists to avoid.
             "UPDATE feeds SET
                 title = COALESCE(NULLIF(?2, ''), title),
                 site_url = COALESCE(?3, site_url),
-                icon = COALESCE(?4, icon),
+                icon_url = COALESCE(?4, icon_url),
                 etag = ?5,
                 last_modified = ?6,
                 last_fetch_at = ?7,
                 next_fetch_at = ?8,
                 interval_s = ?9,
                 failures = 0,
+                refusals = 0,
+                retry_after_s = NULL,
+                ttl_minutes = ?10,
                 last_error = NULL
              WHERE id = ?1",
             params![
@@ -407,6 +489,7 @@ pub async fn record_success(
                 now_iso(),
                 next_fetch_at,
                 next_interval_s as i64,
+                parsed.ttl_minutes,
             ],
         )?;
         tx.commit()?;
@@ -427,7 +510,7 @@ pub async fn record_unchanged(db: &Db, feed_id: i64, next_interval_s: u64) -> ru
         let next_fetch_at = schedule_at(next_interval_s);
         c.execute(
             "UPDATE feeds SET last_fetch_at = ?2, next_fetch_at = ?3, interval_s = ?4,
-                              failures = 0, last_error = NULL
+                              failures = 0, refusals = 0, last_error = NULL
              WHERE id = ?1",
             params![feed_id, now_iso(), next_fetch_at, next_interval_s as i64],
         )?;
@@ -436,24 +519,57 @@ pub async fn record_unchanged(db: &Db, feed_id: i64, next_interval_s: u64) -> ru
     .await
 }
 
+/// A server that named a wait gets it, exactly.
+///
+/// Not a failure: `failures` and `refusals` are untouched, so a busy host asking
+/// us to come back in an hour does not also push the feed down the backoff curve
+/// or toward being retired. The wait is recorded so the inspector can show that
+/// it was asked for and honoured.
+pub async fn record_retry_after(db: &Db, feed_id: i64, seconds: u64) -> rusqlite::Result<()> {
+    db.with(move |c| {
+        c.execute(
+            "UPDATE feeds SET last_fetch_at = ?2, next_fetch_at = ?3, retry_after_s = ?4
+             WHERE id = ?1",
+            params![feed_id, now_iso(), schedule_at(seconds), seconds as i64],
+        )?;
+        Ok(())
+    })
+    .await
+}
+
+/// How many refusals in a row before a feed is retired.
+///
+/// More than one because a 403 can be a misconfigured CDN for an afternoon, and
+/// few enough that we are not asking a host that has plainly said no for weeks.
+pub const MAX_REFUSALS: i64 = 4;
+
 pub async fn record_failure(
     db: &Db,
     feed_id: i64,
     error: String,
     next_interval_s: u64,
+    refused: bool,
 ) -> rusqlite::Result<()> {
     db.with(move |c| {
         let next_fetch_at = schedule_at(next_interval_s);
         c.execute(
-            "UPDATE feeds SET failures = failures + 1, last_error = ?2, last_fetch_at = ?3,
-                              next_fetch_at = ?4, interval_s = ?5
+            "UPDATE feeds
+             SET failures = failures + 1, last_error = ?2, last_fetch_at = ?3,
+                 next_fetch_at = ?4, interval_s = ?5,
+                 refusals = CASE WHEN ?6 THEN refusals + 1 ELSE 0 END,
+                 -- A run of refusals retires the feed rather than asking a host
+                 -- that has said no once a week forever. It stays in the list,
+                 -- with the reason on it, for the reader to re-enable.
+                 disabled = CASE WHEN ?6 AND refusals + 1 >= ?7 THEN 1 ELSE disabled END
              WHERE id = ?1",
             params![
                 feed_id,
                 error,
                 now_iso(),
                 next_fetch_at,
-                next_interval_s as i64
+                next_interval_s as i64,
+                refused,
+                MAX_REFUSALS
             ],
         )?;
         Ok(())

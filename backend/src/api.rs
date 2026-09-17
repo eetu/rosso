@@ -26,6 +26,9 @@ use crate::AppState;
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/feeds", get(list_feeds).post(add_feed))
+        // Before the `{id}` route: a static segment wins over a parameter, and
+        // `inspect` would otherwise be read as a feed id.
+        .route("/api/feeds/inspect", get(inspect_feeds))
         .route("/api/feeds/{id}", patch(update_feed).delete(delete_feed))
         .route("/api/feeds/{id}/refresh", post(refresh_feed))
         .route("/api/opml/import", post(import_opml))
@@ -121,6 +124,30 @@ struct MarkReadResponse {
     marked: usize,
 }
 
+#[derive(Serialize)]
+struct InspectionResponse {
+    feeds: Vec<store::FeedInspection>,
+    /// The bounds the adaptive schedule works inside, so the dialog can say what
+    /// a number means rather than showing it bare.
+    min_interval_s: u64,
+    max_interval_s: u64,
+    /// Consecutive refusals before a feed retires itself.
+    max_refusals: i64,
+}
+
+/// What every feed asked for, and what rosso is doing about it.
+async fn inspect_feeds(
+    _: Auth,
+    State(state): State<AppState>,
+) -> AppResult<Json<InspectionResponse>> {
+    Ok(Json(InspectionResponse {
+        feeds: store::inspect_feeds(&state.db).await?,
+        min_interval_s: feed::schedule::MIN_INTERVAL_S,
+        max_interval_s: feed::schedule::MAX_INTERVAL_S,
+        max_refusals: store::MAX_REFUSALS,
+    }))
+}
+
 async fn list_feeds(_: Auth, State(state): State<AppState>) -> AppResult<Json<FeedsResponse>> {
     Ok(Json(FeedsResponse {
         feeds: store::list_feeds(&state.db).await?,
@@ -150,9 +177,18 @@ async fn add_feed(
     .await?
     .ok_or_else(|| AppError::Conflict(format!("already subscribed to {}", found.feed_url)))?;
 
+    // The validators from the fetch that just happened, so the first scheduled
+    // poll can be a 304 instead of a second full download.
     let interval = crate::feed::schedule::DEFAULT_INTERVAL_S;
-    let (inserted, _) =
-        store::record_success(&state.db, id, found.parsed, None, None, interval).await?;
+    let (inserted, _) = store::record_success(
+        &state.db,
+        id,
+        found.parsed,
+        found.etag,
+        found.last_modified,
+        interval,
+    )
+    .await?;
     tracing::info!(feed_id = id, url = %found.feed_url, inserted, "subscribed");
 
     store::get_feed(&state.db, id)

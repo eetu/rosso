@@ -90,6 +90,25 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
     // the way it did before the column existed.
     add_column_if_missing(conn, "feeds", "llm_enabled", "INTEGER NOT NULL DEFAULT 1")?;
     add_column_if_missing(conn, "feeds", "icon_attempts", "INTEGER NOT NULL DEFAULT 0")?;
+    // What the publisher asked for, and how we answered — the inspector reads
+    // these, and `refusals` is what retires a feed that keeps saying no.
+    add_column_if_missing(conn, "feeds", "refusals", "INTEGER NOT NULL DEFAULT 0")?;
+    add_column_if_missing(conn, "feeds", "retry_after_s", "INTEGER")?;
+    add_column_if_missing(conn, "feeds", "ttl_minutes", "INTEGER")?;
+    add_column_if_missing(conn, "feeds", "icon_url", "TEXT")?;
+
+    // `icon` briefly held whatever URL a feed declared, which the sidebar would
+    // then render as an <img> pointing at the publisher — the third-party
+    // request the favicon worker exists to avoid. Move any such value to
+    // `icon_url`, where it becomes a download candidate instead.
+    //
+    // Idempotent by shape rather than by version: once it has run, no row
+    // matches, so it costs one indexed scan per boot and needs no gate.
+    conn.execute(
+        "UPDATE feeds SET icon_url = icon, icon = NULL
+         WHERE icon IS NOT NULL AND icon NOT LIKE 'data:%'",
+        [],
+    )?;
 
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     Ok(())
@@ -143,8 +162,10 @@ CREATE TABLE IF NOT EXISTS feeds (
     folder_id     INTEGER REFERENCES folders(id) ON DELETE SET NULL,
     -- A `data:` URI, not a link. Linking to the publisher's own favicon would
     -- announce the reader to every site in the list on every page load, from
-    -- whatever network it is opened on.
+    -- whatever network it is opened on. `icon_url` is what the feed *declared*,
+    -- kept only as the best candidate for the worker to download.
     icon          TEXT,
+    icon_url      TEXT,
     icon_attempts INTEGER NOT NULL DEFAULT 0,
 
     etag          TEXT,

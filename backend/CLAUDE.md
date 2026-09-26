@@ -154,6 +154,12 @@ shutdown.rs   bounded graceful drain
   publishers sit behind a bot challenge no HTTP client can pass (`cf-mitigated`
   in the response says so outright) — that is a host declining, and the reader
   falls back to the feed's own teaser rather than working around it.
+- **An unreachable host costs an item nothing.** The attempt counters retire an
+  item the model cannot handle — a text it chokes on, an answer that is never
+  valid JSON. A host that is switched off is not that, and charging items for it
+  retires them permanently: one reboot of the mini took 310 items' summaries for
+  good. `ollama::is_unreachable` draws the line, and a *status* error stays
+  chargeable, because a 500 from Ollama is an answer.
 - **Attempt counters reset on success.** They exist to retire something
   permanently broken; left cumulative, three unlucky failures over a month would
   retire a healthy item.

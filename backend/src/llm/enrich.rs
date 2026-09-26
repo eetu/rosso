@@ -136,9 +136,13 @@ pub async fn enrich_one(
             }
         }
         Err(err) => {
-            tracing::debug!(item = candidate.id, err = %err, "enrichment failed");
+            // A host that is off costs the item nothing. Only an answer we could
+            // not use counts toward retiring it.
+            let unreachable = ollama::is_unreachable(&err);
+            tracing::debug!(item = candidate.id, err = %err, unreachable, "enrichment failed");
             if let Err(db_err) =
-                store::record_enrich_failure(&state.db, candidate.id, err.to_string()).await
+                store::record_enrich_failure(&state.db, candidate.id, err.to_string(), unreachable)
+                    .await
             {
                 tracing::error!(item = candidate.id, err = ?db_err, "could not record failure");
             }

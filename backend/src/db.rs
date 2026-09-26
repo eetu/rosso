@@ -111,6 +111,30 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
         [],
     )?;
 
+    // Items retired for nothing: the attempt counters used to be charged when
+    // the model host was simply switched off, so one reboot of the mini took the
+    // summaries of 310 items permanently. Give those attempts back.
+    //
+    // Idempotent by shape. Nothing writes these errors with a spent counter any
+    // more, and a row this clears either succeeds — wiping the error — or fails
+    // with a real one that does count.
+    let transient = "(enrich_error LIKE 'error sending request%' \
+         OR enrich_error LIKE '%operation timed out%')";
+    conn.execute(
+        &format!(
+            "UPDATE items SET enrich_attempts = 0, enrich_error = NULL
+             WHERE enrich_attempts > 0 AND enrich_error IS NOT NULL AND {transient}"
+        ),
+        [],
+    )?;
+    conn.execute(
+        "UPDATE items SET embed_attempts = 0, embed_error = NULL
+         WHERE embed_attempts > 0 AND embed_error IS NOT NULL
+           AND (embed_error LIKE 'error sending request%'
+                OR embed_error LIKE '%operation timed out%')",
+        [],
+    )?;
+
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     Ok(())
 }

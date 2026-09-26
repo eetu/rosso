@@ -89,10 +89,22 @@ async fn pass(state: &AppState) -> anyhow::Result<usize> {
                 // The whole batch failed — one call, one outcome. Charging each
                 // item an attempt is right: a text the model chokes on is
                 // indistinguishable from here, and three tries retire it.
-                tracing::debug!(err = %err, n = candidates.len(), "embedding batch failed");
+                // Same rule as enrichment: a host that is off is not the item's
+                // fault, and a whole batch charged for one unreachable request
+                // retires sixteen items at a time.
+                let unreachable = ollama::is_unreachable(&err);
+                tracing::debug!(
+                    err = %err, n = candidates.len(), unreachable,
+                    "embedding batch failed"
+                );
                 for candidate in &candidates {
-                    let _ =
-                        store::record_embed_failure(&state.db, candidate.id, err.to_string()).await;
+                    let _ = store::record_embed_failure(
+                        &state.db,
+                        candidate.id,
+                        err.to_string(),
+                        unreachable,
+                    )
+                    .await;
                 }
                 return Ok(0);
             }

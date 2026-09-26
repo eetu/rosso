@@ -19,8 +19,8 @@ pub struct Stack {
     child: Child,
     pub base: String,
     pub client: reqwest::Client,
-    _data_tmp: TempDir,
-    _static_tmp: TempDir,
+    data_tmp: TempDir,
+    static_tmp: TempDir,
 }
 
 impl Stack {
@@ -28,15 +28,39 @@ impl Stack {
         Self::start_with_env(&[]).await
     }
 
+    /// Restart the backend over the same database, with different environment.
+    ///
+    /// For the things that are only visible across a restart: a boot-time
+    /// migration, or a model host that was absent and comes back.
+    /// Restart the backend over the same database, with different environment.
+    ///
+    /// For what is only visible across a restart: a boot-time migration, or a
+    /// model host that was absent and comes back. `Stack` owns a `Drop`, so the
+    /// child is replaced in place rather than the struct being rebuilt.
+    pub async fn restart_with_env(&mut self, extra: &[(&str, &str)]) -> anyhow::Result<()> {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+
+        let port = free_port()?;
+        self.base = format!("http://127.0.0.1:{port}");
+        self.child = spawn_backend(
+            port,
+            &self.data_tmp.path().join("rosso.db"),
+            self.static_tmp.path(),
+            extra,
+        )?;
+        wait_until_up(&self.client, &self.base).await
+    }
+
     /// Like [`Stack::start`] but with extra env vars — e.g. pointing
     /// `ROSSO_OLLAMA_URL` at a wiremock stub, or at a dead port to prove the
     /// reader still works without the LLM.
     pub async fn start_with_env(extra: &[(&str, &str)]) -> anyhow::Result<Self> {
         let data_tmp = tempfile::tempdir()?;
+        let static_tmp = tempfile::tempdir()?;
         let db_path = data_tmp.path().join("rosso.db");
 
         // A stub dist/ so serve_spa's index.html fallback resolves.
-        let static_tmp = tempfile::tempdir()?;
         // Carries an inline script on purpose: the CSP hashes what the shell
         // actually contains, so a shell without one would prove nothing.
         std::fs::write(
@@ -56,44 +80,18 @@ impl Stack {
             .timeout(Duration::from_secs(10))
             .build()?;
 
-        let mut cmd = Command::new(bin_path());
-        cmd.env("DEV_AUTH", "1") // bypass forward-auth so /api/* is reachable
-            .env("ROSSO_BIND", format!("127.0.0.1:{port}"))
-            .env("ROSSO_DB_PATH", &db_path)
-            .env("STATIC_DIR", static_tmp.path())
-            .env("ROSSO_SHUTDOWN_GRACE_S", "0")
-            // wiremock serves from 127.0.0.1, which extraction refuses by
-            // default as an SSRF guard. Without this the extraction tests would
-            // "pass" by being refused before they reach what they test.
-            .env("ROSSO_EXTRACT_ALLOW_PRIVATE", "1")
-            .env("RUST_LOG", "warn");
-        for (k, v) in extra {
-            cmd.env(k, v);
-        }
-        let child = cmd.spawn()?;
+        let child = spawn_backend(port, &db_path, static_tmp.path(), extra)?;
 
-        // Generous: the suite spawns several backends in parallel, so startup can
-        // lag behind the first probe.
-        let mut up = false;
-        for _ in 0..200 {
-            if let Ok(r) = client.get(format!("{base}/status")).send().await {
-                if r.status().is_success() {
-                    up = true;
-                    break;
-                }
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
+        // The `Stack` owns the child before the readiness wait, so a failure to
+        // come up still drops it rather than leaking the process.
         let stack = Stack {
             child,
             base,
             client,
-            _data_tmp: data_tmp,
-            _static_tmp: static_tmp,
+            data_tmp,
+            static_tmp,
         };
-        if !up {
-            anyhow::bail!("backend did not come up within 20s");
-        }
+        wait_until_up(&stack.client, &stack.base).await?;
         Ok(stack)
     }
 
@@ -176,6 +174,43 @@ fn install_crypto_provider() {
     ONCE.call_once(|| {
         let _ = rustls::crypto::ring::default_provider().install_default();
     });
+}
+
+fn spawn_backend(
+    port: u16,
+    db_path: &std::path::Path,
+    static_dir: &std::path::Path,
+    extra: &[(&str, &str)],
+) -> anyhow::Result<Child> {
+    let mut cmd = Command::new(bin_path());
+    cmd.env("DEV_AUTH", "1") // bypass forward-auth so /api/* is reachable
+        .env("ROSSO_BIND", format!("127.0.0.1:{port}"))
+        .env("ROSSO_DB_PATH", db_path)
+        .env("STATIC_DIR", static_dir)
+        .env("ROSSO_SHUTDOWN_GRACE_S", "0")
+        // wiremock serves from 127.0.0.1, which extraction refuses by default as
+        // an SSRF guard. Without this the extraction tests would "pass" by being
+        // refused before they reach what they test.
+        .env("ROSSO_EXTRACT_ALLOW_PRIVATE", "1")
+        .env("RUST_LOG", "warn");
+    for (k, v) in extra {
+        cmd.env(k, v);
+    }
+    Ok(cmd.spawn()?)
+}
+
+/// Generous: the suite spawns several backends in parallel, so startup can lag
+/// behind the first probe.
+async fn wait_until_up(client: &reqwest::Client, base: &str) -> anyhow::Result<()> {
+    for _ in 0..200 {
+        if let Ok(r) = client.get(format!("{base}/status")).send().await {
+            if r.status().is_success() {
+                return Ok(());
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    anyhow::bail!("backend did not come up within 20s")
 }
 
 pub fn free_port() -> anyhow::Result<u16> {

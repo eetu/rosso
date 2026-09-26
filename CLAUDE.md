@@ -40,7 +40,11 @@ integration/  spawned-binary tests: real backend, wiremocked feeds + Ollama
 - `just dev` runs both; `DEV_AUTH=1` in `backend/.env` bypasses forward-auth.
 - `ROSSO_OLLAMA_URL` unset = plain reader, no LLM features. That is a supported
   mode, not a broken one — test in it.
-- Integration tests are `#[ignore]`: `just test-integration`.
+- Integration tests are `#[ignore]`: `just test-integration`. Use the recipe, not
+  a bare `cargo test -p rosso-integration` — the harness spawns the *built*
+  backend binary, which cargo will not rebuild for you when only backend sources
+  changed. The suite then tests the previous build and cheerfully agrees with
+  whatever you were about to conclude.
 
 ## Out of scope
 

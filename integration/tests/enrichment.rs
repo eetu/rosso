@@ -298,6 +298,108 @@ async fn an_unreachable_model_host_leaves_the_reader_whole() {
 
 #[tokio::test]
 #[ignore = "spawns the backend binary"]
+async fn a_host_that_was_merely_off_does_not_cost_items_their_summaries() {
+    // The attempt counter retires an item the model cannot handle. A host that
+    // is switched off is not that — and charging items for it means one reboot
+    // of the mini permanently strips summaries from everything that happened to
+    // be due, which is the reader depending on Ollama by the back door.
+    // Six items, so the worker sees a full batch and retries on its busy
+    // cadence — three attempts land well inside the outage below. With a single
+    // item it backs off to the idle pause and the budget would survive by
+    // accident, proving nothing.
+    let server = MockServer::start().await;
+    let body = format!("{BODY} {BODY}");
+    let entries: String = (1..=6)
+        .map(|n| {
+            format!(
+                "<item><title>Story {n}</title><link>{base}/p{n}</link><guid>g{n}</guid>\
+                 <content:encoded xmlns:content=\"http://purl.org/rss/1.0/modules/content/\">\
+                 <![CDATA[<p>{body}</p>]]></content:encoded></item>",
+                base = server.uri()
+            )
+        })
+        .collect();
+    Mock::given(method("GET"))
+        .and(path("/feed.xml"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            format!(
+                "<?xml version=\"1.0\"?><rss version=\"2.0\"><channel>\
+                 <title>Test blog</title><link>{base}/</link>{entries}</channel></rss>",
+                base = server.uri()
+            ),
+            "application/rss+xml",
+        ))
+        .mount(&server)
+        .await;
+    let feeds = server;
+
+    // A port with nothing on it yet, so calls are refused immediately. The host
+    // arrives on this same port later *without* restarting rosso — a restart
+    // would run the boot-time repair and mask what this is testing.
+    let port = rosso_integration::free_port().unwrap();
+    let stack = Stack::start_with_env(&[
+        ("ROSSO_OLLAMA_URL", &format!("http://127.0.0.1:{port}")),
+        ("RUST_LOG", "info,rosso_backend=debug"),
+    ])
+    .await
+    .unwrap();
+    stack
+        .put_json("/api/settings", json!({ "interest_profile": "rust" }))
+        .await;
+    stack
+        .post_json("/api/feeds", json!({ "url": feeds.uri() + "/feed.xml" }))
+        .await;
+
+    // Long enough for the worker to have burned the whole budget, had it been
+    // counting: the batch is retried every couple of seconds.
+    tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+    let items = stack.get_json("/api/items").await;
+    assert_eq!(items["items"].as_array().unwrap().len(), 6);
+    assert!(
+        items["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|i| i["summary"].is_null()),
+        "somehow enriched with nothing listening"
+    );
+
+    // The host comes back on the port rosso is already pointed at. No restart,
+    // so nothing has given those attempts back — if they were spent, these items
+    // are retired for good and the wait below times out.
+    let listener = std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
+    let ollama = wiremock::MockServer::builder()
+        .listener(listener)
+        .start()
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/tags"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({ "models": [{ "name": "m" }] })),
+        )
+        .mount(&ollama)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/chat"))
+        .respond_with(chat_reply(json!({
+            "summary": "PyO3 compiles a Rust extension into a Python wheel.",
+            "score": 71,
+            "reason": "rust",
+            "tags": ["rust"]
+        })))
+        .mount(&ollama)
+        .await;
+    let body = wait_for(&stack, "/api/items", |b| {
+        b["items"]
+            .as_array()
+            .is_some_and(|a| a.iter().all(|i| i["summary"].is_string()))
+    })
+    .await;
+    assert_eq!(body["items"][0]["score"], 71);
+}
+
+#[tokio::test]
+#[ignore = "spawns the backend binary"]
 async fn a_model_answering_with_nonsense_does_not_wedge_the_worker() {
     let ollama = fake_ollama(ResponseTemplate::new(200).set_body_json(json!({
         "message": { "role": "assistant", "content": "I'm afraid I can't do that." }

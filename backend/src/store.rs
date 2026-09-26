@@ -1384,11 +1384,21 @@ pub async fn record_embedding(
     .await
 }
 
-pub async fn record_embed_failure(db: &Db, item_id: i64, error: String) -> rusqlite::Result<()> {
+/// Record a failed embedding. `unreachable` costs the item nothing — see
+/// [`record_enrich_failure`].
+pub async fn record_embed_failure(
+    db: &Db,
+    item_id: i64,
+    error: String,
+    unreachable: bool,
+) -> rusqlite::Result<()> {
     db.with(move |c| {
         c.execute(
-            "UPDATE items SET embed_attempts = embed_attempts + 1, embed_error = ?2 WHERE id = ?1",
-            params![item_id, error],
+            "UPDATE items
+             SET embed_attempts = embed_attempts + CASE WHEN ?3 THEN 0 ELSE 1 END,
+                 embed_error = ?2
+             WHERE id = ?1",
+            params![item_id, error, unreachable],
         )?;
         Ok(())
     })
@@ -1723,12 +1733,24 @@ pub async fn record_rescore(
     .await
 }
 
-pub async fn record_enrich_failure(db: &Db, id: i64, error: String) -> rusqlite::Result<()> {
+/// Record a failed enrichment.
+///
+/// `unreachable` means the request never landed, and costs the item nothing:
+/// the counter is for retiring an item the model cannot handle, not for the
+/// hours the model host spends switched off.
+pub async fn record_enrich_failure(
+    db: &Db,
+    id: i64,
+    error: String,
+    unreachable: bool,
+) -> rusqlite::Result<()> {
     db.with(move |c| {
         c.execute(
-            "UPDATE items SET enrich_attempts = enrich_attempts + 1, enrich_error = ?2
+            "UPDATE items
+             SET enrich_attempts = enrich_attempts + CASE WHEN ?3 THEN 0 ELSE 1 END,
+                 enrich_error = ?2
              WHERE id = ?1",
-            params![id, error],
+            params![id, error, unreachable],
         )?;
         Ok(())
     })

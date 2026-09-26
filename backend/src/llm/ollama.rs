@@ -114,6 +114,21 @@ pub async fn embed(
     Ok(parsed.embeddings)
 }
 
+/// Did the request never reach the model host?
+///
+/// The attempt counters exist to retire an item the model cannot handle — a text
+/// it always chokes on, an answer that is never valid JSON. A host that is
+/// switched off is not that, and charging items for it retires them
+/// permanently: the mini being rebooted once cost 310 items their summaries,
+/// which is the reader depending on Ollama being up by the back door.
+///
+/// A status error is excluded deliberately. A 500 from Ollama *is* an answer,
+/// and one that repeats is worth giving up on.
+pub fn is_unreachable(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<reqwest::Error>()
+        .is_some_and(|e| !e.is_status() && (e.is_connect() || e.is_timeout() || e.is_request()))
+}
+
 /// List the models the host has installed.
 pub async fn models(http: &reqwest::Client, base: &str) -> anyhow::Result<Vec<String>> {
     #[derive(Deserialize)]

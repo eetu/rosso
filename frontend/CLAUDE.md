@@ -21,6 +21,11 @@ embedded by the Rust backend.
   shim exists (hooks, CI, the justfile).
 - Icons: `@lucide/svelte`, imported per-icon. No emoji.
 
+- Per-row verbs live in the shared context menu (`menu.svelte.ts` +
+  `ContextMenu.svelte`, copied from nib), never as a row of icons. Right-click
+  and the row's `⋯` open the same items. The menu is rendered once in the root
+  layout — inside the sidebar it would be clipped by that panel's scroll box.
+
 ## Notes that bite
 
 - **`fallback: "index.html"`, not `200.html`.** In pure-SPA mode adapter-static
@@ -30,5 +35,9 @@ embedded by the Rust backend.
 - **Installed iOS PWAs need `100vh`, not `100dvh`.** The dynamic viewport is
   stale at cold start and resolves short, leaving a dead band until the device is
   rotated. The root layout detects standalone mode and switches.
+- **Hover-only affordances are unreachable on a phone.** Touch has neither hover
+  nor right-click, so anything revealed by `li:hover` needs a
+  `@media (hover: none)` twin that simply shows it. The row's `⋯` is the only
+  route to a feed's verbs there.
 - **Icon PNGs are committed.** Regenerate with `./scripts/gen-icons.sh` after
   editing `static/favicon.svg`; the build ships no rasterizer.

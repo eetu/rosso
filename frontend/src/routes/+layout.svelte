@@ -2,8 +2,25 @@
   import "$lib/styles/halo.css";
 
   import { updated } from "$app/state";
+  import ContextMenu from "$lib/components/ContextMenu.svelte";
 
   let { children } = $props();
+
+  /**
+   * The browser's own menu is suppressed app-wide, so a right-click always gets
+   * rosso's. Half-suppression is worse than none: a reader who sometimes gets
+   * Back/Reload and sometimes a feed's verbs stops right-clicking at all.
+   *
+   * Text fields keep the browser menu — losing paste and spellcheck inside the
+   * interest profile to a rule about feed rows would be a poor trade. The check
+   * is on the *target*, so a field inside a row that has its own menu still
+   * wins.
+   */
+  function onContextMenu(event: MouseEvent) {
+    const target = event.target as HTMLElement | null;
+    if (target?.closest("input, textarea, select, [contenteditable]")) return;
+    event.preventDefault();
+  }
 
   $effect(() => {
     // SvelteKit's version poll flips this when a new build is deployed. The SPA
@@ -28,7 +45,13 @@
   });
 </script>
 
+<svelte:window oncontextmenu={onContextMenu} />
+
 {@render children()}
+
+<!-- Mounted once, at the root. A menu rendered inside the sidebar would be
+     clipped by its scroll box — which is the whole reason it lives here. -->
+<ContextMenu />
 
 <style>
   /* halo.css is tokens and primitives, not a reset, so this has to be stated.

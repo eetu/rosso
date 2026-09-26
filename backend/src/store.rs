@@ -38,6 +38,9 @@ pub struct Feed {
     /// Whether the model reads this feed. Off leaves its items unsummarized and
     /// unscored, which for a release-notes feed is the right answer.
     pub llm_enabled: bool,
+    /// `None` means the house User-Agent. Carried on the list so a feed's row
+    /// menu can say what it is fetched as without a second request.
+    pub user_agent: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -144,7 +147,7 @@ pub struct ItemPatch {
 const FEED_COLUMNS: &str = "f.id, f.url, f.site_url, \
      COALESCE(NULLIF(f.custom_title, ''), NULLIF(f.title, ''), f.url) AS shown_title, \
      f.folder_id, f.icon, f.last_fetch_at, f.next_fetch_at, f.last_error, f.disabled, \
-     f.llm_enabled";
+     f.llm_enabled, f.user_agent";
 
 fn feed_from_row(row: &Row) -> rusqlite::Result<Feed> {
     Ok(Feed {
@@ -160,6 +163,7 @@ fn feed_from_row(row: &Row) -> rusqlite::Result<Feed> {
         last_error: row.get("last_error")?,
         disabled: row.get::<_, i64>("disabled")? != 0,
         llm_enabled: row.get::<_, i64>("llm_enabled")? != 0,
+        user_agent: row.get("user_agent")?,
     })
 }
 

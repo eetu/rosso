@@ -1,13 +1,12 @@
 <script lang="ts">
+  import Ellipsis from "@lucide/svelte/icons/ellipsis";
   import Info from "@lucide/svelte/icons/info";
-  import RotateCw from "@lucide/svelte/icons/rotate-cw";
-  import Sparkles from "@lucide/svelte/icons/sparkles";
-  import Trash2 from "@lucide/svelte/icons/trash-2";
   import TriangleAlert from "@lucide/svelte/icons/triangle-alert";
 
-  import type { ItemView } from "$lib/api";
+  import type { Feed, ItemView } from "$lib/api";
   import AddFeed from "$lib/components/AddFeed.svelte";
   import FeedInspector from "$lib/components/FeedInspector.svelte";
+  import { openMenu } from "$lib/menu.svelte";
   import { reader } from "$lib/stores/reader.svelte";
 
   // On a phone the sidebar *is* the screen, so choosing something has to hand
@@ -49,6 +48,39 @@
     } finally {
       busyFeed = null;
     }
+  }
+
+  /**
+   * Every verb that applies to one feed, in one place.
+   *
+   * Three hover icons in a 15rem column was the alternative, and adding a fourth
+   * for the agent is what made it untenable — the row has room for a name, a
+   * count, and one affordance. The menu also gives the verbs labels, which an
+   * icon row only ever gives them on hover.
+   */
+  function feedMenu(event: MouseEvent, feed: Feed) {
+    const host = reader.settings?.llm_available;
+    openMenu(event, feed.title, [
+      { label: "Refresh now", run: () => refresh(feed.id) },
+      {
+        label: feed.llm_enabled ? "Stop summarizing" : "Summarize",
+        // Greyed with the reason rather than hidden: an absent verb teaches that
+        // the feature does not exist, which is wrong — the host is just asleep.
+        disabled: !host && !feed.llm_enabled,
+        hint: !host && !feed.llm_enabled ? "no model host" : undefined,
+        run: () => reader.setFeedLlm(feed.id, !feed.llm_enabled),
+      },
+      {
+        label: "Feed details…",
+        hint: feed.user_agent ?? undefined,
+        run: () => (inspecting = true),
+      },
+      {
+        label: "Unsubscribe",
+        danger: true,
+        run: () => remove(feed.id, feed.title),
+      },
+    ]);
   }
 </script>
 
@@ -126,7 +158,11 @@
 
   <ul>
     {#each reader.feeds as feed (feed.id)}
-      <li class:busy={busyFeed === feed.id}>
+      <!-- Right-click anywhere on the row opens the same menu the ⋯ does. -->
+      <li
+        class:busy={busyFeed === feed.id}
+        oncontextmenu={(e) => feedMenu(e, feed)}
+      >
         <button
           class="feed"
           class:active={reader.feedId === feed.id}
@@ -152,34 +188,11 @@
           {/if}
         </button>
         <span class="actions">
-          <!-- Some feeds say everything in the title — release notes, a commit
-               log — and a summary of one costs a generation to restate the
-               headline. Off leaves what was already written alone. -->
-          {#if reader.settings?.llm_available || !feed.llm_enabled}
-            <button
-              class:off={!feed.llm_enabled}
-              onclick={() => reader.setFeedLlm(feed.id, !feed.llm_enabled)}
-              aria-label={feed.llm_enabled
-                ? "stop summarizing {feed.title}"
-                : "summarize {feed.title}"}
-              title={feed.llm_enabled
-                ? "summarized and scored"
-                : "not read by the model"}
-            >
-              <Sparkles size={13} />
-            </button>
-          {/if}
           <button
-            onclick={() => refresh(feed.id)}
-            aria-label="refresh {feed.title}"
+            onclick={(e) => feedMenu(e, feed)}
+            aria-label="actions for {feed.title}"
           >
-            <RotateCw size={13} />
-          </button>
-          <button
-            onclick={() => remove(feed.id, feed.title)}
-            aria-label="remove {feed.title}"
-          >
-            <Trash2 size={13} />
+            <Ellipsis size={13} />
           </button>
         </span>
       </li>
@@ -281,6 +294,15 @@
     display: flex;
   }
 
+  /* Touch has no hover and no right-click, so the one affordance has to be
+     standing there. Hiding it behind a gesture the device cannot make would put
+     every per-feed verb out of reach on a phone. */
+  @media (hover: none) {
+    li .actions {
+      display: flex;
+    }
+  }
+
   button {
     border: none;
     background: none;
@@ -343,13 +365,6 @@
 
   .actions button:hover {
     color: var(--halo-text-main);
-  }
-
-  /* Struck through rather than merely dimmed: every icon in this row is quiet,
-     so dimming one more would not read as a state. */
-  .actions button.off {
-    color: var(--halo-text-light);
-    text-decoration: line-through;
   }
 
   /* Sits where the warning triangle would, so a feed does not shift sideways

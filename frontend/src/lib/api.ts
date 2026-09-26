@@ -28,6 +28,8 @@ export type Feed = {
   disabled: boolean;
   /** Whether the model reads this feed. Off leaves its items plain. */
   llm_enabled: boolean;
+  /** null means the house User-Agent. */
+  user_agent: string | null;
 };
 
 export type Item = {

@@ -67,6 +67,60 @@
     await api.updateFeed(id, { disabled: false });
     await Promise.all([load(), reader.reloadFeeds()]);
   }
+
+  /**
+   * What to send as User-Agent, offered as a list rather than a text box.
+   *
+   * The blocks these exist for are name allowlists, not bot detection — a
+   * publisher whose WAF refuses `rosso/0.1.0` will wave `curl` through while
+   * refusing `Feedly` too. So the useful answers are a short known set, and
+   * inviting a typed string mostly invites typos.
+   */
+  const AGENTS = [
+    { label: "rosso (default)", value: "" },
+    { label: "curl", value: "curl/8.7.1" },
+    { label: "wget", value: "Wget/1.21.4" },
+    { label: "python-requests", value: "python-requests/2.31.0" },
+    {
+      label: "a browser",
+      value:
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
+        "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+    },
+  ];
+
+  const CUSTOM = "custom";
+
+  /** Which feed has its agent picker open. */
+  let editing = $state<number | null>(null);
+  let choice = $state("");
+  let draft = $state("");
+
+  function edit(feed: Inspection["feeds"][number]) {
+    editing = feed.id;
+    const current = feed.user_agent ?? "";
+    const known = AGENTS.some((a) => a.value === current);
+    choice = known ? current : CUSTOM;
+    draft = current;
+  }
+
+  /** The label for whatever a feed is currently set to. */
+  function agentLabel(agent: string | null): string {
+    return AGENTS.find((a) => a.value === (agent ?? ""))?.label ?? agent ?? "";
+  }
+
+  /**
+   * Setting this also clears the feed's extraction attempts, server-side —
+   * every item it would help has already been given up on, so without that the
+   * setting would look like it did nothing.
+   */
+  async function saveAgent(id: number) {
+    await api.updateFeed(id, {
+      user_agent: choice === CUSTOM ? draft : choice,
+    });
+    editing = null;
+    await load();
+  }
 </script>
 
 <div
@@ -116,6 +170,35 @@
           </ul>
           {#if feed.last_error}
             <p class="err" title={feed.last_error}>{feed.last_error}</p>
+          {/if}
+
+          <!-- Some publishers allowlist client names, so an unfamiliar one is
+               refused while curl and wget are waved through. Naming a different
+               agent for one feed is the lever for that. -->
+          {#if editing === feed.id}
+            <p class="agent">
+              <select bind:value={choice} aria-label="fetch {feed.title} as">
+                {#each AGENTS as agent (agent.value)}
+                  <option value={agent.value}>{agent.label}</option>
+                {/each}
+                <option value={CUSTOM}>something else…</option>
+              </select>
+              {#if choice === CUSTOM}
+                <input
+                  bind:value={draft}
+                  placeholder="a User-Agent string"
+                  spellcheck="false"
+                  aria-label="user-agent for {feed.title}"
+                />
+              {/if}
+              <button onclick={() => saveAgent(feed.id)}>save</button>
+              <button onclick={() => (editing = null)}>cancel</button>
+            </p>
+          {:else}
+            <p class="agent">
+              <span>fetched as {agentLabel(feed.user_agent)}</span>
+              <button onclick={() => edit(feed)}>change</button>
+            </p>
           {/if}
           {#if feed.disabled}
             <!-- Retired rather than deleted, so the reason stays readable and
@@ -262,6 +345,51 @@
     white-space: nowrap;
     font-size: 0.72rem;
     color: var(--halo-error);
+  }
+
+  .agent {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin: 0.3rem 0 0;
+    font-size: 0.72rem;
+    color: var(--halo-text-muted);
+  }
+
+  .agent span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .agent select,
+  .agent input {
+    flex: 1;
+    min-width: 0;
+    padding: 0.15rem 0.35rem;
+    border: 1px solid var(--halo-border);
+    border-radius: var(--halo-radius);
+    background: var(--halo-bg-light);
+    color: var(--halo-text-main);
+    font: inherit;
+    font-size: 0.72rem;
+  }
+
+  .agent button {
+    flex: none;
+    padding: 0.1rem 0.4rem;
+    border: 1px solid var(--halo-border);
+    border-radius: var(--halo-radius);
+    background: none;
+    color: var(--halo-text-muted);
+    font: inherit;
+    font-size: 0.7rem;
+    cursor: pointer;
+  }
+
+  .agent button:hover {
+    color: var(--halo-text-main);
   }
 
   .retired {

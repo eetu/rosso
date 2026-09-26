@@ -3,7 +3,7 @@
 
 use rosso_integration::Stack;
 use serde_json::json;
-use wiremock::matchers::{method, path, path_regex};
+use wiremock::matchers::{header, method, path, path_regex};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const ARTICLE_BODY: &str = "PyO3 lets a Python package ship a compiled Rust extension \
@@ -261,6 +261,83 @@ async fn a_host_that_refuses_is_dropped_rather_than_asked_once_per_item() {
     let items = stack.get_json("/api/items").await;
     assert_eq!(items["items"].as_array().unwrap().len(), 8);
     drop(server);
+}
+
+#[tokio::test]
+#[ignore = "spawns the backend binary"]
+async fn a_per_feed_agent_is_sent_and_revives_what_was_given_up_on() {
+    // Some publishers allowlist client names rather than detecting bots: the
+    // same WAF that refuses `rosso/0.1.0` waves `curl` through. This stubs that
+    // shape — the page is served only to the chosen agent.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/feed.xml"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw(teaser_feed(&server.uri()), "application/rss+xml"),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/article"))
+        .and(header("user-agent", "curl/8.7.1"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(article_page(), "text/html; charset=utf-8"),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/article"))
+        .respond_with(ResponseTemplate::new(403))
+        .mount(&server)
+        .await;
+
+    let stack = Stack::start().await.unwrap();
+    let feed = stack
+        .post_json("/api/feeds", json!({ "url": server.uri() + "/feed.xml" }))
+        .await;
+    let id = stack.get_json("/api/items").await["items"][0]["id"]
+        .as_i64()
+        .unwrap();
+
+    // Refused under the house agent, and retired after the one attempt.
+    let detail = stack.get_json(&format!("/api/items/{id}")).await;
+    assert!(detail["content_html"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("A short teaser"));
+
+    stack
+        .patch_json(
+            &format!("/api/feeds/{}", feed["id"].as_i64().unwrap()),
+            json!({ "user_agent": "curl/8.7.1" }),
+        )
+        .await;
+
+    // Setting it has to clear the attempt counters too, or every item it would
+    // help has already been given up on and the setting looks inert.
+    let detail = stack.get_json(&format!("/api/items/{id}")).await;
+    assert!(
+        detail["content_html"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("compiled Rust extension"),
+        "the agent did not reach the wire, or the item was never retried"
+    );
+
+    // And it is reported back, so the inspector shows what is being sent.
+    let seen = stack.get_json("/api/feeds/inspect").await;
+    assert_eq!(seen["feeds"][0]["user_agent"], "curl/8.7.1");
+
+    // Clearing it returns the feed to the house agent.
+    stack
+        .patch_json(
+            &format!("/api/feeds/{}", feed["id"].as_i64().unwrap()),
+            json!({ "user_agent": "" }),
+        )
+        .await;
+    let seen = stack.get_json("/api/feeds/inspect").await;
+    assert_eq!(seen["feeds"][0]["user_agent"], serde_json::Value::Null);
 }
 
 #[tokio::test]

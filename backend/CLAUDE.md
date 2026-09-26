@@ -137,6 +137,12 @@ shutdown.rs   bounded graceful drain
   exactly the feeds that truncate to a round number: Autosport cuts at 400 and
   the threshold *is* 400, so 44 of its 50 items read as complete articles while
   all 50 ended in a hand-off link. `says_truncated` looks for the hand-off.
+- **`feeds.user_agent` overrides the house agent for one feed**, on both its
+  polls and its article fetches, and setting it clears that feed's
+  `extract_attempts` — every item it could help has already been retired, so
+  without that the setting appears to do nothing. The refusal memory is keyed by
+  host *and* agent, since a host that refused one has said nothing about another.
+  Default stays the honest `rosso/<version> (+url)`.
 - **A host that refuses extraction is dropped, not asked per item.** Autosport
   serves its feed and 403s every article page from a CloudFront rule, at 50
   items a day. Noticing those items are teasers would otherwise buy 50 refused

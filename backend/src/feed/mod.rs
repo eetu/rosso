@@ -52,6 +52,7 @@ async fn poll_inner(state: &AppState, feed: &DueFeed) -> anyhow::Result<PollResu
         feed.etag.as_deref(),
         feed.last_modified.as_deref(),
         state.cfg.max_feed_bytes,
+        feed.user_agent.as_deref(),
     )
     .await?;
 

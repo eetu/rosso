@@ -82,8 +82,12 @@ pub async fn conditional_get(
     etag: Option<&str>,
     last_modified: Option<&str>,
     max_bytes: usize,
+    user_agent: Option<&str>,
 ) -> anyhow::Result<Fetched> {
     let mut req = http.get(url);
+    if let Some(agent) = user_agent {
+        req = req.header(header::USER_AGENT, agent);
+    }
     if let Some(etag) = etag {
         req = req.header(header::IF_NONE_MATCH, etag);
     }

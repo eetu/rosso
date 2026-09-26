@@ -96,6 +96,7 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
     add_column_if_missing(conn, "feeds", "retry_after_s", "INTEGER")?;
     add_column_if_missing(conn, "feeds", "ttl_minutes", "INTEGER")?;
     add_column_if_missing(conn, "feeds", "icon_url", "TEXT")?;
+    add_column_if_missing(conn, "feeds", "user_agent", "TEXT")?;
 
     // `icon` briefly held whatever URL a feed declared, which the sidebar would
     // then render as an <img> pointing at the publisher — the third-party
@@ -180,6 +181,10 @@ CREATE TABLE IF NOT EXISTS feeds (
     -- already say everything — a summary of a release-notes entry costs a
     -- generation to restate the headline.
     llm_enabled   INTEGER NOT NULL DEFAULT 1,
+    -- Overrides the house User-Agent for this feed and its article pages. NULL
+    -- means the honest default, which is what every feed gets until someone
+    -- decides otherwise for one of them.
+    user_agent    TEXT,
     created_at    TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_feeds_due ON feeds(next_fetch_at) WHERE disabled = 0;

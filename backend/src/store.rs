@@ -98,6 +98,7 @@ pub struct DueFeed {
     pub last_modified: Option<String>,
     pub interval_s: u64,
     pub failures: u32,
+    pub user_agent: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -126,6 +127,8 @@ pub struct FeedPatch {
     pub folder_id: Option<i64>,
     pub disabled: Option<bool>,
     pub llm_enabled: Option<bool>,
+    /// Empty string clears it back to the house default.
+    pub user_agent: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -253,6 +256,21 @@ pub async fn update_feed(db: &Db, id: i64, patch: FeedPatch) -> rusqlite::Result
                 params![id, i64::from(disabled), now_iso()],
             )?;
         }
+        if let Some(agent) = patch.user_agent {
+            // Changing the agent is the one action that can make a previously
+            // refused page fetchable, so it clears the attempt counters it would
+            // otherwise be defeated by — without this the setting looks broken,
+            // because every item it would help has already been retired.
+            changed += c.execute(
+                "UPDATE feeds SET user_agent = NULLIF(TRIM(?2), '') WHERE id = ?1",
+                params![id, agent],
+            )?;
+            c.execute(
+                "UPDATE items SET extract_attempts = 0, extract_error = NULL
+                 WHERE feed_id = ?1 AND extracted = 0",
+                params![id],
+            )?;
+        }
         if let Some(llm_enabled) = patch.llm_enabled {
             changed += c.execute(
                 "UPDATE feeds SET llm_enabled = ?2 WHERE id = ?1",
@@ -295,6 +313,8 @@ pub struct FeedInspection {
     pub disabled: bool,
     pub last_error: Option<String>,
     pub llm_enabled: bool,
+    /// `None` means the house User-Agent.
+    pub user_agent: Option<String>,
 }
 
 pub async fn inspect_feeds(db: &Db) -> rusqlite::Result<Vec<FeedInspection>> {
@@ -304,7 +324,7 @@ pub async fn inspect_feeds(db: &Db) -> rusqlite::Result<Vec<FeedInspection>> {
                     COALESCE(NULLIF(custom_title, ''), NULLIF(title, ''), url) AS shown_title,
                     interval_s, last_fetch_at, next_fetch_at, ttl_minutes, retry_after_s,
                     (etag IS NOT NULL OR last_modified IS NOT NULL) AS conditional,
-                    failures, refusals, disabled, last_error, llm_enabled
+                    failures, refusals, disabled, last_error, llm_enabled, user_agent
              FROM feeds ORDER BY shown_title COLLATE NOCASE",
         )?;
         let rows = stmt.query_map([], |r| {
@@ -323,6 +343,7 @@ pub async fn inspect_feeds(db: &Db) -> rusqlite::Result<Vec<FeedInspection>> {
                 disabled: r.get::<_, i64>("disabled")? != 0,
                 last_error: r.get("last_error")?,
                 llm_enabled: r.get::<_, i64>("llm_enabled")? != 0,
+                user_agent: r.get("user_agent")?,
             })
         })?;
         rows.collect()
@@ -392,7 +413,7 @@ pub async fn delete_feed(db: &Db, id: i64) -> rusqlite::Result<bool> {
 pub async fn due_feeds(db: &Db, limit: u32) -> rusqlite::Result<Vec<DueFeed>> {
     db.with(move |c| {
         let mut stmt = c.prepare(
-            "SELECT id, url, etag, last_modified, interval_s, failures
+            "SELECT id, url, etag, last_modified, interval_s, failures, user_agent
              FROM feeds
              WHERE disabled = 0 AND next_fetch_at <= ?1
              ORDER BY next_fetch_at
@@ -406,6 +427,7 @@ pub async fn due_feeds(db: &Db, limit: u32) -> rusqlite::Result<Vec<DueFeed>> {
                 last_modified: r.get(3)?,
                 interval_s: r.get::<_, i64>(4)?.max(0) as u64,
                 failures: r.get::<_, i64>(5)?.max(0) as u32,
+                user_agent: r.get(6)?,
             })
         })?;
         rows.collect()
@@ -416,7 +438,8 @@ pub async fn due_feeds(db: &Db, limit: u32) -> rusqlite::Result<Vec<DueFeed>> {
 pub async fn feed_by_id_for_poll(db: &Db, id: i64) -> rusqlite::Result<Option<DueFeed>> {
     db.with(move |c| {
         c.query_row(
-            "SELECT id, url, etag, last_modified, interval_s, failures FROM feeds WHERE id = ?1",
+            "SELECT id, url, etag, last_modified, interval_s, failures, user_agent \
+             FROM feeds WHERE id = ?1",
             params![id],
             |r| {
                 Ok(DueFeed {
@@ -426,6 +449,7 @@ pub async fn feed_by_id_for_poll(db: &Db, id: i64) -> rusqlite::Result<Option<Du
                     last_modified: r.get(3)?,
                     interval_s: r.get::<_, i64>(4)?.max(0) as u64,
                     failures: r.get::<_, i64>(5)?.max(0) as u32,
+                    user_agent: r.get(6)?,
                 })
             },
         )
@@ -1090,6 +1114,8 @@ pub async fn digest_items(db: &Db, ids: &[i64]) -> rusqlite::Result<Vec<Item>> {
 pub struct PendingExtraction {
     pub id: i64,
     pub url: String,
+    /// The feed's User-Agent override, if it has one.
+    pub user_agent: Option<String>,
 }
 
 const PENDING_EXTRACTION_WHERE: &str = "i.url IS NOT NULL \
@@ -1102,7 +1128,8 @@ pub async fn due_for_extraction(db: &Db, limit: u32) -> rusqlite::Result<Vec<Pen
         // Newest first: the backlog that matters is what the reader is about to
         // look at, not what fell off the bottom of the list weeks ago.
         let sql = format!(
-            "SELECT i.id, i.url FROM items i
+            "SELECT i.id, i.url, f.user_agent FROM items i
+             JOIN feeds f ON f.id = i.feed_id
              WHERE {PENDING_EXTRACTION_WHERE}
              ORDER BY COALESCE(i.published_at, i.fetched_at) DESC
              LIMIT :limit"
@@ -1117,6 +1144,7 @@ pub async fn due_for_extraction(db: &Db, limit: u32) -> rusqlite::Result<Vec<Pen
                 Ok(PendingExtraction {
                     id: r.get(0)?,
                     url: r.get(1)?,
+                    user_agent: r.get(2)?,
                 })
             },
         )?;
@@ -1130,7 +1158,9 @@ pub async fn due_for_extraction(db: &Db, limit: u32) -> rusqlite::Result<Vec<Pen
 pub async fn pending_extraction(db: &Db, id: i64) -> rusqlite::Result<Option<PendingExtraction>> {
     db.with(move |c| {
         let sql = format!(
-            "SELECT i.id, i.url FROM items i WHERE i.id = :id AND {PENDING_EXTRACTION_WHERE}"
+            "SELECT i.id, i.url, f.user_agent FROM items i
+             JOIN feeds f ON f.id = i.feed_id
+             WHERE i.id = :id AND {PENDING_EXTRACTION_WHERE}"
         );
         c.query_row(
             &sql,
@@ -1139,6 +1169,7 @@ pub async fn pending_extraction(db: &Db, id: i64) -> rusqlite::Result<Option<Pen
                 Ok(PendingExtraction {
                     id: r.get(0)?,
                     url: r.get(1)?,
+                    user_agent: r.get(2)?,
                 })
             },
         )

@@ -95,11 +95,20 @@ impl std::fmt::Display for Refused {
 impl std::error::Error for Refused {}
 
 /// Fetch `url` and reduce it to the article.
-pub async fn extract(http: &Client, url: &str, allow_private: bool) -> anyhow::Result<Extracted> {
+pub async fn extract(
+    http: &Client,
+    url: &str,
+    allow_private: bool,
+    user_agent: Option<&str>,
+) -> anyhow::Result<Extracted> {
     if !allow_private {
         refuse_internal(url).await?;
     }
-    let res = http.get(url).send().await?;
+    let mut req = http.get(url);
+    if let Some(agent) = user_agent {
+        req = req.header(reqwest::header::USER_AGENT, agent);
+    }
+    let res = req.send().await?;
     if let Some(refusal) = Refused::from(&res) {
         return Err(refusal.into());
     }
@@ -221,7 +230,14 @@ fn is_public(ip: IpAddr) -> bool {
 /// Extract one pending item and record the outcome. Never returns an error: a
 /// page that 404s or defeats readability is an ordinary event.
 pub async fn run_one(state: &AppState, pending: &PendingExtraction) -> Outcome {
-    match extract(&state.http, &pending.url, state.cfg.extract_allow_private).await {
+    match extract(
+        &state.http,
+        &pending.url,
+        state.cfg.extract_allow_private,
+        pending.user_agent.as_deref(),
+    )
+    .await
+    {
         Ok(article) => {
             if let Err(err) =
                 store::record_extraction(&state.db, pending.id, article.html, article.text).await
@@ -308,7 +324,13 @@ async fn run(state: AppState) {
         match store::due_for_extraction(&state.db, 10).await {
             Ok(pending) if !pending.is_empty() => {
                 for item in &pending {
-                    let host = host_of(&item.url);
+                    // Keyed by agent as well as host: a host that refused the
+                    // house agent has said nothing about a different one, and
+                    // setting one is exactly how a reader responds to a refusal.
+                    let host = host_of(&item.url).map(|h| match item.user_agent.as_deref() {
+                        Some(agent) => format!("{h} as {agent}"),
+                        None => h,
+                    });
                     // A host that has refused this many times is not asked
                     // again. The items are retired unfetched, so they keep the
                     // feed's own teaser and cost the publisher nothing.

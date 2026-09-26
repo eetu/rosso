@@ -141,6 +141,8 @@ export type FeedInspection = {
   disabled: boolean;
   last_error: string | null;
   llm_enabled: boolean;
+  /** null means the house User-Agent. */
+  user_agent: string | null;
 };
 
 export type Inspection = {
@@ -232,7 +234,7 @@ export const api = {
   inspectFeeds: () => request<Inspection>("/api/feeds/inspect"),
   updateFeed: (
     id: number,
-    patch: { llm_enabled?: boolean; disabled?: boolean },
+    patch: { llm_enabled?: boolean; disabled?: boolean; user_agent?: string },
   ) =>
     request<Feed>(`/api/feeds/${id}`, {
       method: "PATCH",

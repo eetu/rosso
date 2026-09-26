@@ -3,7 +3,7 @@
 
 use rosso_integration::Stack;
 use serde_json::json;
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{method, path, path_regex};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const ARTICLE_BODY: &str = "PyO3 lets a Python package ship a compiled Rust extension \
@@ -161,6 +161,105 @@ async fn a_publisher_that_refuses_us_is_asked_exactly_once() {
             .contains("A short teaser"));
     }
     // `expect(1)` is asserted when the server drops.
+    drop(server);
+}
+
+#[tokio::test]
+#[ignore = "spawns the backend binary"]
+async fn a_body_that_says_it_is_a_teaser_is_extracted_whatever_its_length() {
+    // Autosport's shape: a description well past the 400-character full-text
+    // threshold that still ends by handing off to the article. Before this it
+    // read as a complete piece and was never extracted, so the reader showed a
+    // paragraph and a "Keep reading" link.
+    let server = MockServer::start().await;
+    let long = "word ".repeat(120);
+    let body = format!(
+        "<?xml version=\"1.0\"?><rss version=\"2.0\"><channel>\
+         <title>Wire</title><link>{base}/</link>\
+         <item><title>Baku pile-up</title><link>{base}/article</link><guid>a</guid>\
+         <description><![CDATA[<p>{long}...<a href=\"{base}/article\">Keep reading</a></p>]]>\
+         </description></item></channel></rss>",
+        base = server.uri()
+    );
+    Mock::given(method("GET"))
+        .and(path("/feed.xml"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(body, "application/rss+xml"))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/article"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(article_page(), "text/html; charset=utf-8"),
+        )
+        .mount(&server)
+        .await;
+
+    let stack = Stack::start_with_env(&[("ROSSO_EXTRACT_ALLOW_PRIVATE", "1")])
+        .await
+        .unwrap();
+    stack
+        .post_json("/api/feeds", json!({ "url": server.uri() + "/feed.xml" }))
+        .await;
+
+    let id = stack.get_json("/api/items").await["items"][0]["id"]
+        .as_i64()
+        .unwrap();
+    let detail = stack.get_json(&format!("/api/items/{id}")).await;
+    let html = detail["content_html"].as_str().unwrap_or_default();
+    assert!(
+        html.contains("compiled Rust extension"),
+        "the teaser was taken for the whole article: {html}"
+    );
+}
+
+#[tokio::test]
+#[ignore = "spawns the backend binary"]
+async fn a_host_that_refuses_is_dropped_rather_than_asked_once_per_item() {
+    // A feed whose pages are all behind the same WAF. Noticing its items are
+    // teasers must not turn into one refused request per item, every day,
+    // against a host that has already said no.
+    let server = MockServer::start().await;
+    let items: String = (1..=8)
+        .map(|n| {
+            format!(
+                "<item><title>Story {n}</title><link>{base}/a{n}</link><guid>g{n}</guid>\
+                 <description>short teaser</description></item>",
+                base = server.uri()
+            )
+        })
+        .collect();
+    let body = format!(
+        "<?xml version=\"1.0\"?><rss version=\"2.0\"><channel>\
+         <title>Walled</title><link>{base}/</link>{items}</channel></rss>",
+        base = server.uri()
+    );
+    Mock::given(method("GET"))
+        .and(path("/feed.xml"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(body, "application/rss+xml"))
+        .mount(&server)
+        .await;
+    // Every article page is blocked. `expect` is a range: the worker learns
+    // after three and stops, so the eight items cost far fewer than eight.
+    let walled = Mock::given(method("GET"))
+        .and(path_regex(r"^/a\d+$"))
+        .respond_with(ResponseTemplate::new(403))
+        .expect(1..=4)
+        .named("article pages, asked a few times and then left alone");
+    server.register(walled).await;
+
+    let stack = Stack::start_with_env(&[("RUST_LOG", "info,rosso_backend=debug")])
+        .await
+        .unwrap();
+    stack
+        .post_json("/api/feeds", json!({ "url": server.uri() + "/feed.xml" }))
+        .await;
+
+    // Long enough for the worker's boot delay and a pass over the whole batch.
+    tokio::time::sleep(std::time::Duration::from_secs(25)).await;
+
+    // The items still read, from the feed's own teaser.
+    let items = stack.get_json("/api/items").await;
+    assert_eq!(items["items"].as_array().unwrap().len(), 8);
     drop(server);
 }
 

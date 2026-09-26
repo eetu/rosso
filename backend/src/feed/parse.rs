@@ -101,6 +101,10 @@ fn parse_entry(
     let short = content_text
         .as_deref()
         .is_none_or(|t| t.chars().count() < FULL_TEXT_CHARS);
+    // A length guess is only needed when the publisher did not say. Plenty do —
+    // and the ones that truncate to a round number are exactly the ones a
+    // threshold gets wrong.
+    let says_so = content_html.as_deref().is_some_and(says_truncated);
 
     let guid = stable_guid(entry, url.as_deref(), content_text.as_deref());
 
@@ -117,8 +121,62 @@ fn parse_entry(
         published_at: entry.published.or(entry.updated),
         content_html,
         content_text,
-        truncated: from_summary || short,
+        truncated: from_summary || short || says_so,
     }
+}
+
+/// Anchor text a publisher uses to point at the rest of the article.
+const CONTINUATIONS: &[&str] = &[
+    "keep reading",
+    "read more",
+    "read the full",
+    "read the rest",
+    "continue reading",
+    "read on",
+    "full story",
+    "view full",
+];
+
+/// Does the body end by pointing at the rest of itself?
+///
+/// `FULL_TEXT_CHARS` is a guess for feeds that say nothing, and it is wrong in
+/// the one case that matters: a publisher who truncates to a round number lands
+/// either side of it at random. Autosport cuts at 400 characters and rosso's
+/// threshold *is* 400, so 44 of 50 items read as complete articles — while all
+/// 50 ended in "Keep reading".
+///
+/// Two shapes, both meaning the same thing: an ellipsis immediately before a
+/// trailing link, or a trailing link whose text is a continuation phrase. Both
+/// require the link to be at the *end*, so an article that merely cites a source
+/// mid-paragraph is untouched.
+fn says_truncated(html: &str) -> bool {
+    let lower = html.to_ascii_lowercase();
+    let Some(anchor) = lower.rfind("<a") else {
+        return false;
+    };
+    // Nothing but the link and its closing tags may follow, or this is a link in
+    // the body rather than a hand-off at the end.
+    let tail = &lower[anchor..];
+    if !tail.ends_with("</a>")
+        && !tail.rsplit("</a>").next().is_some_and(|rest| {
+            rest.trim_matches(|c: char| {
+                c.is_whitespace() || c == '<' || c == '>' || c == '/' || c.is_alphabetic()
+            })
+            .is_empty()
+        })
+    {
+        return false;
+    }
+
+    let before = &lower[..anchor];
+    let trimmed = before.trim_end();
+    if trimmed.ends_with("...") || trimmed.ends_with('…') || trimmed.ends_with("…</p>") {
+        return true;
+    }
+
+    let text = html_to_text(&lower[anchor..]);
+    let text = text.trim();
+    CONTINUATIONS.iter().any(|phrase| text.starts_with(phrase))
 }
 
 /// Below this many characters of non-link, non-label prose, a body is carrying
@@ -551,6 +609,44 @@ mod tests {
         );
         assert!(html.contains("Hello"));
         assert_eq!(feed.items[0].content_text.as_deref(), Some("Hello world"));
+    }
+
+    #[test]
+    fn a_teaser_that_says_it_is_one_is_believed_over_its_length() {
+        // Autosport's real shape: a body over the 400-character threshold that
+        // still ends by handing off to the article. 44 of its 50 items read as
+        // complete before this, because it truncates at exactly that length.
+        let long = "word ".repeat(120);
+        let teaser = format!("<p>{long}...<a href=\"https://example.com/a\">Keep reading</a></p>");
+        assert!(
+            says_truncated(&teaser),
+            "an explicit hand-off was read as a full article"
+        );
+
+        // The phrase alone is enough, with no ellipsis.
+        assert!(says_truncated(
+            "<p>Something.</p><a href=\"https://example.com/a\">Read more</a>"
+        ));
+        // And an ellipsis alone, with no phrase.
+        assert!(says_truncated(
+            "<p>Something…</p><a href=\"https://example.com/a\">Baku pile-up</a>"
+        ));
+    }
+
+    #[test]
+    fn an_article_that_merely_links_somewhere_is_not_a_teaser() {
+        // A link in the middle of the prose says nothing about completeness, and
+        // treating it as a hand-off would send every linking blog post through
+        // the extractor for nothing.
+        assert!(!says_truncated(
+            "<p>As <a href=\"https://example.com/x\">reported earlier</a>, the \
+             race was neutralised. It resumed twenty minutes later.</p>"
+        ));
+        // A trailing link that is plainly part of the piece.
+        assert!(!says_truncated(
+            "<p>The results are on <a href=\"https://example.com/r\">the timing page</a>.</p>"
+        ));
+        assert!(!says_truncated("<p>No links at all here.</p>"));
     }
 
     #[test]

@@ -220,7 +220,7 @@ fn is_public(ip: IpAddr) -> bool {
 
 /// Extract one pending item and record the outcome. Never returns an error: a
 /// page that 404s or defeats readability is an ordinary event.
-pub async fn run_one(state: &AppState, pending: &PendingExtraction) {
+pub async fn run_one(state: &AppState, pending: &PendingExtraction) -> Outcome {
     match extract(&state.http, &pending.url, state.cfg.extract_allow_private).await {
         Ok(article) => {
             if let Err(err) =
@@ -230,6 +230,7 @@ pub async fn run_one(state: &AppState, pending: &PendingExtraction) {
             } else {
                 tracing::debug!(item = pending.id, url = %pending.url, "extracted");
             }
+            Outcome::Extracted
         }
         Err(err) => {
             // A refusal is not a fault of ours and not worth retrying, so it is
@@ -246,9 +247,31 @@ pub async fn run_one(state: &AppState, pending: &PendingExtraction) {
             {
                 tracing::error!(item = pending.id, err = ?db_err, "could not record failure");
             }
+            if terminal {
+                Outcome::Refused
+            } else {
+                Outcome::Failed
+            }
         }
     }
 }
+
+/// What one extraction attempt amounted to. The worker counts `Refused` per
+/// host, because a host that refuses one article refuses the next fifty.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    Extracted,
+    Failed,
+    Refused,
+}
+
+/// Refusals from one host before rosso stops offering it items.
+///
+/// Autosport's feed serves fine while its article pages answer 403 from a
+/// CloudFront rule, and it ships 50 items a day. Without this, correctly
+/// noticing those items are teasers would turn into 50 refused requests daily to
+/// a host that has already said no — the fix for one bug paying for another.
+const MAX_HOST_REFUSALS: u32 = 3;
 
 /// Extract on demand, for an item the reader just opened.
 ///
@@ -280,12 +303,45 @@ async fn run(state: AppState) {
     tokio::time::sleep(Duration::from_secs(15)).await;
 
     let mut last_hit: HashMap<String, Instant> = HashMap::new();
+    let mut refusals: HashMap<String, u32> = HashMap::new();
     loop {
         match store::due_for_extraction(&state.db, 10).await {
             Ok(pending) if !pending.is_empty() => {
                 for item in &pending {
+                    let host = host_of(&item.url);
+                    // A host that has refused this many times is not asked
+                    // again. The items are retired unfetched, so they keep the
+                    // feed's own teaser and cost the publisher nothing.
+                    if host
+                        .as_deref()
+                        .and_then(|h| refusals.get(h))
+                        .is_some_and(|n| *n >= MAX_HOST_REFUSALS)
+                    {
+                        let reason = "the publisher refuses automated fetches".to_string();
+                        if let Err(err) =
+                            store::record_extraction_failure(&state.db, item.id, reason, true).await
+                        {
+                            tracing::error!(item = item.id, err = ?err, "could not retire item");
+                        }
+                        continue;
+                    }
+
                     wait_for_host(&mut last_hit, &item.url).await;
-                    run_one(&state, item).await;
+                    match (run_one(&state, item).await, host) {
+                        (Outcome::Refused, Some(host)) => {
+                            let seen = refusals.entry(host.clone()).or_default();
+                            *seen += 1;
+                            if *seen == MAX_HOST_REFUSALS {
+                                tracing::info!(%host, "host refuses extraction; not asking again");
+                            }
+                        }
+                        // One success clears the count: a WAF that was having a
+                        // bad afternoon should not cost the host forever.
+                        (Outcome::Extracted, Some(host)) => {
+                            refusals.remove(&host);
+                        }
+                        _ => {}
+                    }
                 }
             }
             Ok(_) => {}
@@ -293,6 +349,12 @@ async fn run(state: AppState) {
         }
         tokio::time::sleep(Duration::from_secs(30)).await;
     }
+}
+
+fn host_of(url: &str) -> Option<String> {
+    Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_string))
 }
 
 /// Sleep until at least [`PER_HOST_GAP`] has passed since this host was last hit.

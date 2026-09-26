@@ -132,6 +132,16 @@ shutdown.rs   bounded graceful drain
   Both `insert_feed` and `record_success` once wrote the declared URL into
   `icon`, which the sidebar renders directly — the third-party request the
   favicon worker exists to avoid. The URL is a download candidate, never markup.
+- **A publisher saying "keep reading" beats counting characters.**
+  `FULL_TEXT_CHARS` is a guess for feeds that say nothing, and it is wrong for
+  exactly the feeds that truncate to a round number: Autosport cuts at 400 and
+  the threshold *is* 400, so 44 of its 50 items read as complete articles while
+  all 50 ended in a hand-off link. `says_truncated` looks for the hand-off.
+- **A host that refuses extraction is dropped, not asked per item.** Autosport
+  serves its feed and 403s every article page from a CloudFront rule, at 50
+  items a day. Noticing those items are teasers would otherwise buy 50 refused
+  requests daily to a host that has said no. The worker counts refusals per host
+  in memory and stops after three; one success clears it.
 - **A refusal is not a retry.** 401/403/404/410 from an article page retire the
   item after one attempt instead of spending the budget to hear the same answer
   twice more; the budget is for a host that is slow or briefly broken. Some

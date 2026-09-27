@@ -7,6 +7,12 @@
   import AddFeed from "$lib/components/AddFeed.svelte";
   import FeedInspector from "$lib/components/FeedInspector.svelte";
   import { openMenu } from "$lib/menu.svelte";
+  import {
+    prefs,
+    SIDEBAR_DEFAULT,
+    SIDEBAR_MAX,
+    SIDEBAR_MIN,
+  } from "$lib/prefs.svelte";
   import { reader } from "$lib/stores/reader.svelte";
 
   // On a phone the sidebar *is* the screen, so choosing something has to hand
@@ -27,6 +33,70 @@
       (v) => v.id !== "interesting" || reader.settings?.interest_profile.trim(),
     ),
   );
+
+  let resizing = $state(false);
+
+  /**
+   * Drag the sidebar's right edge to widen it — long feed names are the whole
+   * reason, and the right width depends on the screen, not on the feeds.
+   *
+   * Pointer capture on press, so a drag that overshoots the window still ends
+   * on the handle. The width is saved once when the drag ends rather than on
+   * every move: the pref is the resting width, not the path to it.
+   */
+  function startResize(event: PointerEvent) {
+    if (event.button !== 0) return;
+    const handle = event.currentTarget as HTMLElement;
+    const startX = event.clientX;
+    const startWidth = prefs.sidebarWidth;
+    try {
+      handle.setPointerCapture(event.pointerId);
+    } catch {
+      // Synthetic events carry no live pointer to capture.
+    }
+    resizing = true;
+    event.preventDefault();
+
+    const move = (e: PointerEvent) =>
+      prefs.setSidebarWidth(startWidth + e.clientX - startX);
+    const end = () => {
+      resizing = false;
+      prefs.save();
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", end);
+      handle.removeEventListener("pointercancel", end);
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", end);
+    handle.addEventListener("pointercancel", end);
+  }
+
+  /** Arrows nudge, Shift nudges further, Home/End jump to the bounds. */
+  function resizeByKey(event: KeyboardEvent) {
+    const step = event.shiftKey ? 64 : 16;
+    const next = {
+      ArrowLeft: prefs.sidebarWidth - step,
+      ArrowRight: prefs.sidebarWidth + step,
+      Home: SIDEBAR_MIN,
+      End: SIDEBAR_MAX,
+    }[event.key];
+    if (next === undefined) return;
+    event.preventDefault();
+    prefs.setSidebarWidth(next);
+    prefs.save();
+  }
+
+  /** Double-click puts it back — the obvious shortcut, never the only route. */
+  function resetWidth() {
+    prefs.setSidebarWidth(SIDEBAR_DEFAULT);
+    prefs.save();
+  }
+
+  // While dragging, the page must not select text or show the text cursor as
+  // the pointer crosses the list and the reader.
+  $effect(() => {
+    document.documentElement.classList.toggle("resizing", resizing);
+  });
 
   let busyFeed = $state<number | null>(null);
   let inspecting = $state(false);
@@ -89,7 +159,7 @@
   }
 </script>
 
-<aside>
+<aside style:--sidebar-width="{prefs.sidebarWidth}px">
   <nav>
     {#each views as v (v.id)}
       <button
@@ -213,6 +283,29 @@
   </ul>
 
   <div class="add"><AddFeed /></div>
+  <!-- The splitter. Focusable so the width is reachable without a mouse, and a
+       separator with a value so a screen reader can say where it is.
+
+       Svelte's lint treats every `separator` as static and objects to the
+       tabindex and handlers. A *focusable* separator carrying aria-valuenow is
+       the WAI-ARIA window-splitter pattern — an interactive widget — which the
+       rule does not distinguish. -->
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+  <div
+    class="resize"
+    class:active={resizing}
+    role="separator"
+    aria-orientation="vertical"
+    aria-label="resize sources"
+    aria-valuemin={SIDEBAR_MIN}
+    aria-valuemax={SIDEBAR_MAX}
+    aria-valuenow={prefs.sidebarWidth}
+    tabindex="0"
+    title="drag to resize · double-click to reset"
+    onpointerdown={startResize}
+    ondblclick={resetWidth}
+    onkeydown={resizeByKey}
+  ></div>
 </aside>
 
 {#if inspecting}
@@ -221,10 +314,11 @@
 
 <style>
   aside {
+    position: relative;
     display: flex;
     flex-direction: column;
     min-height: 0;
-    width: 15rem;
+    width: var(--sidebar-width, 15rem);
     flex: none;
     padding: 0.75rem;
     gap: 0.5rem;
@@ -403,7 +497,52 @@
      specificity, and a media query earlier in the sheet would simply lose.
      On a phone this is not a sidebar, it is a screen — 15rem of it beside the
      list left about 150px for the content. */
+  /* A wide hit area straddling the border, so the edge is easy to catch,
+     drawn as a line only when it is being offered or used. */
+  .resize {
+    position: absolute;
+    top: 0;
+    right: -4px;
+    bottom: 0;
+    width: 8px;
+    cursor: col-resize;
+    touch-action: none;
+    z-index: 1;
+  }
+
+  .resize::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 3px;
+    width: 2px;
+    background: transparent;
+    transition: background var(--halo-d-fast);
+  }
+
+  .resize:hover::after,
+  .resize:focus-visible::after,
+  .resize.active::after {
+    background: var(--halo-accent);
+  }
+
+  .resize:focus-visible {
+    outline: none;
+  }
+
+  :global(html.resizing),
+  :global(html.resizing *) {
+    cursor: col-resize !important;
+    user-select: none !important;
+  }
+
   @media (max-width: 800px) {
+    /* The sidebar is the whole screen here, so there is no edge to drag. */
+    .resize {
+      display: none;
+    }
+
     aside {
       width: 100%;
       border-right: none;

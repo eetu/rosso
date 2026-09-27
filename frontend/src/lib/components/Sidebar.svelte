@@ -30,6 +30,8 @@
 
   let busyFeed = $state<number | null>(null);
   let inspecting = $state(false);
+  /** Which feed the inspector was opened from, so it can scroll to it. */
+  let inspectFeed = $state<number | null>(null);
 
   async function refresh(id: number) {
     busyFeed = id;
@@ -73,7 +75,10 @@
       {
         label: "Feed details…",
         hint: feed.user_agent ?? undefined,
-        run: () => (inspecting = true),
+        run: () => {
+          inspectFeed = feed.id;
+          inspecting = true;
+        },
       },
       {
         label: "Unsubscribe",
@@ -151,7 +156,13 @@
     feeds
     <!-- How often each is polled, and whether what the publisher asked for is
          being honoured. -->
-    <button onclick={() => (inspecting = true)} aria-label="inspect feeds">
+    <button
+      onclick={() => {
+        inspectFeed = null;
+        inspecting = true;
+      }}
+      aria-label="inspect feeds"
+    >
       <Info size={13} />
     </button>
   </h2>
@@ -205,7 +216,7 @@
 </aside>
 
 {#if inspecting}
-  <FeedInspector onclose={() => (inspecting = false)} />
+  <FeedInspector focus={inspectFeed} onclose={() => (inspecting = false)} />
 {/if}
 
 <style>

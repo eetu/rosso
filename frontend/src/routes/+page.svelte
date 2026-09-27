@@ -129,11 +129,10 @@
         if (open) void reader.setStarred(open.id, !open.starred);
         break;
       case "Escape":
-        if (settingsOpen) {
-          settingsOpen = false;
-        } else {
-          reader.closeItem();
-        }
+        // Only the reading panes. A dialog swallows Escape at the window before
+        // this runs, and the context menu before that — one rung of the ladder
+        // per press, outermost first.
+        reader.closeItem();
         break;
       default:
         return;

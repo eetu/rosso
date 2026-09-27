@@ -21,6 +21,9 @@ embedded by the Rust backend.
   shim exists (hooks, CI, the justfile).
 - Icons: `@lucide/svelte`, imported per-icon. No emoji.
 
+- Dialogs are built on `Modal.svelte`, never hand-rolled — it owns the veil,
+  Escape, focus, and the header/body/footer geometry from `.halo-dialog`. Only
+  the body scrolls.
 - Per-row verbs live in the shared context menu (`menu.svelte.ts` +
   `ContextMenu.svelte`, copied from nib), never as a row of icons. Right-click
   and the row's `⋯` open the same items. The menu is rendered once in the root

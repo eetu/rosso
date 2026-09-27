@@ -1,6 +1,5 @@
 <script lang="ts">
-  import X from "@lucide/svelte/icons/x";
-
+  import Modal from "$lib/components/Modal.svelte";
   import { reader } from "$lib/stores/reader.svelte";
 
   let { onclose }: { onclose: () => void } = $props();
@@ -73,20 +72,7 @@
   }
 </script>
 
-<div
-  class="backdrop"
-  role="button"
-  tabindex="-1"
-  onclick={onclose}
-  onkeydown={(e) => e.key === "Escape" && onclose()}
-></div>
-
-<section class="panel halo-card" aria-label="settings">
-  <header>
-    <h2>settings</h2>
-    <button onclick={onclose} aria-label="close"><X size={16} /></button>
-  </header>
-
+<Modal title="settings" {onclose}>
   <label for="profile">what you want to read</label>
   <textarea
     id="profile"
@@ -206,7 +192,7 @@
     <p class="hint">{importReport}</p>
   {/if}
 
-  <footer>
+  {#snippet footer()}
     <span class="hint">
       {#if settings && !settings.llm_available}
         model host unreachable — saved settings apply when it is back.
@@ -217,47 +203,10 @@
     <button class="save" onclick={save} disabled={saving}>
       {saving ? "saving…" : "save"}
     </button>
-  </footer>
-</section>
+  {/snippet}
+</Modal>
 
 <style>
-  .backdrop {
-    position: fixed;
-    inset: 0;
-    border: none;
-    background: rgb(0 0 0 / 35%);
-  }
-
-  .panel {
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    width: min(34rem, calc(100vw - 2rem));
-    max-height: calc(100dvh - 2rem);
-    overflow-y: auto;
-    display: flex;
-    flex-direction: column;
-    gap: 0.35rem;
-  }
-
-  header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 0.25rem;
-  }
-
-  h2 {
-    margin: 0;
-    font-family: var(--halo-font-heading);
-    font-size: 0.8rem;
-    font-weight: 500;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--halo-text-muted);
-  }
-
   label {
     font-size: 0.75rem;
     color: var(--halo-text-muted);
@@ -370,14 +319,6 @@
 
   .actions button:disabled {
     cursor: default;
-  }
-
-  footer {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 1rem;
-    margin-top: 0.75rem;
   }
 
   button {

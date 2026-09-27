@@ -79,7 +79,24 @@
 }
 
 /* ----------------------------------------------------------------------
- * Wordmark primitive — same across every app, only the text differs.
+ * Wordmark primitive — same across every app, only the riff and glyph differ.
+ *
+ * The markup is exactly this, and the spacing in it is not a free choice:
+ *
+ *   <span class="halo-wordmark">
+ *     <svg class="glyph" …></svg><span class="riff">mightier than the&nbsp;</span
+ *     >nib<span class="accent">.</span>
+ *   </span>
+ *
+ * Plain inline flow. Do NOT wrap it in a flex row to position the glyph: a
+ * `gap` falls between EVERY flex child, so it lands between the name and its
+ * accent dot too and the mark reads `nib .`. The glyph carries its own margin
+ * below, which is why none is needed.
+ *
+ * The riff ends in `&nbsp;` because Svelte (and JSX) trim whitespace at an
+ * element boundary — an ordinary trailing space there is dropped and the words
+ * run together as `theNib`. A margin is the wrong substitute: it outlives
+ * `display: none` when the riff collapses on narrow screens.
  * -------------------------------------------------------------------- */
 
 .halo-wordmark {
@@ -93,6 +110,24 @@
 
 .halo-wordmark .accent {
   color: var(--halo-accent);
+}
+
+/* The muted lead-in. Apps collapse it below their own breakpoint with
+   `display: none`. (Some repos still call this `.prefix` — migrate on next
+   touch.) */
+.halo-wordmark .riff {
+  font-weight: 400;
+  color: var(--halo-text-muted);
+}
+
+/* Sized in em so it tracks the wordmark rather than drifting from it, and set
+   on the text baseline rather than laid out beside it. */
+.halo-wordmark .glyph {
+  width: 1.2em;
+  height: 1.2em;
+  vertical-align: -0.28em;
+  margin-right: 0.4em;
+  color: var(--halo-text-main);
 }
 
 /* ----------------------------------------------------------------------
@@ -114,12 +149,160 @@
 }
 
 /* ----------------------------------------------------------------------
- * Base — a shared touch nicety for the mobile-first family. Disables iOS
- * double-tap-to-zoom (which misfires on quick repeated taps, e.g. tapping dice /
- * counters / +− steppers) while keeping pinch-zoom and scrolling intact. Scoped
- * to tap targets on purpose — this file is tokens + primitives, not a full reset,
- * so apps still own their own base styles.
+ * Dialog primitive — a veil, and a panel in three regions.
+ *
+ *   <div class="halo-veil"></div>
+ *   <section class="halo-dialog halo-card" role="dialog" aria-modal="true">
+ *     <header>…title… <button>×</button></header>
+ *     <div data-body>…the only thing that scrolls…</div>
+ *     <footer>…buttons, if any…</footer>
+ *   </section>
+ *
+ * **The panel never scrolls; `[data-body]` does.** Putting `overflow-y: auto`
+ * on the panel is the whole bug this primitive exists to prevent: the header
+ * scrolls away with the content, taking the close button with it, and a long
+ * dialog becomes one you cannot dismiss without finding Escape. Header and
+ * footer are `flex: none` so they hold their ground; the body takes the rest and
+ * `min-height: 0` is what lets it actually shrink inside the flex column.
+ *
+ * A footer is optional — a dialog that only reports needs none — but when there
+ * are buttons they belong in it, not at the end of the scrolling content, for
+ * the same reason.
+ *
+ * Width comes from `--halo-dialog-width` so one panel can be wider than another
+ * without a second geometry. Both axes leave a gutter, so a phone never gets a
+ * panel flush to the edge.
  * -------------------------------------------------------------------- */
+
+.halo-veil {
+  position: fixed;
+  inset: 0;
+  border: none;
+  background: rgb(0 0 0 / 35%);
+}
+
+.halo-dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  width: min(var(--halo-dialog-width, 34rem), calc(100vw - 2rem));
+  /* `100dvh` tracks the address bar on a phone. An installed iOS PWA reports it
+     stale at cold start and resolves short, so an app that ships standalone
+     overrides this to `100vh` the same way it does for its shell. */
+  max-height: calc(100dvh - 2rem);
+  padding: 0;
+}
+
+.halo-dialog > header,
+.halo-dialog > footer {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: var(--halo-card-padding);
+}
+
+.halo-dialog > header {
+  padding-bottom: 0.75rem;
+}
+
+.halo-dialog > footer {
+  padding-top: 0.75rem;
+  /* Clears the home indicator when the panel reaches the bottom of a phone. */
+  padding-bottom: calc(var(--halo-card-padding) + env(safe-area-inset-bottom));
+}
+
+.halo-dialog > [data-body] {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 var(--halo-card-padding);
+}
+
+/* A dialog with no footer still needs the bottom gutter its body would have. */
+.halo-dialog > [data-body]:last-child {
+  padding-bottom: calc(var(--halo-card-padding) + env(safe-area-inset-bottom));
+}
+
+/* ----------------------------------------------------------------------
+ * Panes primitive — a side-by-side layout on a desktop that becomes one
+ * screen at a time on a phone.
+ *
+ *   <main class="halo-panes" data-showing="list">
+ *     <aside data-pane="nav">…</aside>
+ *     <section data-pane="list">…</section>
+ *     <article data-pane="detail">…</article>
+ *   </main>
+ *
+ * The app owns one string — which pane is showing — and nothing else; the rest
+ * is here. Attribute rather than class so it is a single assignment, and
+ * framework-neutral.
+ *
+ * Two failures this exists to prevent, both of which only appear on a phone:
+ *
+ * 1. A pane laid out BESIDE the content at every width. A 15rem sidebar on a
+ *    390px screen leaves ~150px for the thing you came to read.
+ * 2. Hiding a pane with no route back to it. Opening a detail view that hides
+ *    the list, with nothing to restore it, is a dead end — the app needs a
+ *    control that sets `data-showing` back.
+ *
+ * The nav pane scrolls as a whole. Only its inner list scrolling works on a
+ * desktop, where everything above that list is short; as a full screen the
+ * fixed parts can fill it and squeeze the one scrolling region to nothing.
+ * -------------------------------------------------------------------- */
+
+.halo-panes {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+@media (max-width: 800px) {
+  .halo-panes > [data-pane] {
+    display: none;
+  }
+
+  .halo-panes[data-showing="nav"] > [data-pane="nav"],
+  .halo-panes[data-showing="list"] > [data-pane="list"],
+  .halo-panes[data-showing="detail"] > [data-pane="detail"] {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .halo-panes > [data-pane="nav"] {
+    width: 100%;
+    overflow-y: auto;
+    padding-bottom: calc(
+      var(--halo-card-padding) + env(safe-area-inset-bottom)
+    );
+  }
+}
+
+/* ----------------------------------------------------------------------
+ * Base — the rules every app in the family needs and none should restate.
+ * Still not a full reset: apps own their own base styles beyond these.
+ *
+ * `border-box` because the default breaks layouts silently rather than
+ * visibly: with `content-box` a declared width sizes the CONTENT and padding
+ * is added outside it, so `width: 100%` plus any padding overflows its parent
+ * by exactly that padding. It surfaces first on a phone, where a full-width
+ * pane runs off the right edge.
+ *
+ * `touch-action` disables iOS double-tap-to-zoom, which misfires on quick
+ * repeated taps (dice, counters, +− steppers), while leaving pinch-zoom and
+ * scrolling intact. Scoped to tap targets on purpose.
+ * -------------------------------------------------------------------- */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
 
 button,
 [role="button"],

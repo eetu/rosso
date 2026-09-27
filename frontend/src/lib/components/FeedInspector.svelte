@@ -1,10 +1,15 @@
 <script lang="ts">
-  import X from "@lucide/svelte/icons/x";
-
   import { api, type Inspection } from "$lib/api";
+  import Modal from "$lib/components/Modal.svelte";
   import { reader } from "$lib/stores/reader.svelte";
 
-  let { onclose }: { onclose: () => void } = $props();
+  type Props = {
+    onclose: () => void;
+    /** Opened from one feed's menu: bring that row into view and mark it. */
+    focus?: number | null;
+  };
+
+  let { onclose, focus = null }: Props = $props();
 
   let data = $state<Inspection | null>(null);
   let error = $state("");
@@ -20,6 +25,21 @@
   $effect(() => {
     void load();
   });
+
+  /**
+   * Bring the feed this was opened from into view.
+   *
+   * Without it, choosing "Feed details" on the twentieth feed opens a list
+   * scrolled to the first — the answer is on screen, just not where you are
+   * looking, which reads as the menu item having done nothing.
+   *
+   * `instant` rather than smooth: the panel has only just appeared, so there is
+   * no position the reader was tracking for an animation to explain.
+   */
+  function reveal(node: HTMLElement) {
+    if (node.dataset.feed !== String(focus)) return;
+    node.scrollIntoView({ block: "center", behavior: "instant" });
+  }
 
   /** Seconds as something readable. Exactness past the hour is not the point. */
   function every(seconds: number): string {
@@ -123,20 +143,7 @@
   }
 </script>
 
-<div
-  class="backdrop"
-  role="button"
-  tabindex="-1"
-  onclick={onclose}
-  onkeydown={(e) => e.key === "Escape" && onclose()}
-></div>
-
-<section class="panel halo-card" aria-label="feed inspector">
-  <header>
-    <h2>feeds</h2>
-    <button onclick={onclose} aria-label="close"><X size={16} /></button>
-  </header>
-
+<Modal title="feeds" {onclose} width="40rem">
   {#if error}
     <p class="error">{error}</p>
   {:else if !data}
@@ -149,7 +156,12 @@
     </p>
     <ul>
       {#each data.feeds as feed (feed.id)}
-        <li class:disabled={feed.disabled}>
+        <li
+          class:disabled={feed.disabled}
+          class:revealed={feed.id === focus}
+          data-feed={feed.id}
+          use:reveal
+        >
           <div class="row">
             <span class="name" title={feed.url}>{feed.title}</span>
             <span class="every">every {every(feed.interval_s)}</span>
@@ -218,53 +230,9 @@
       {/each}
     </ul>
   {/if}
-</section>
+</Modal>
 
 <style>
-  .backdrop {
-    position: fixed;
-    inset: 0;
-    border: none;
-    background: rgb(0 0 0 / 35%);
-  }
-
-  .panel {
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    width: min(40rem, calc(100vw - 2rem));
-    max-height: calc(100dvh - 2rem);
-    overflow-y: auto;
-    display: flex;
-    flex-direction: column;
-    gap: 0.35rem;
-  }
-
-  header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 0.25rem;
-  }
-
-  h2 {
-    margin: 0;
-    font-family: var(--halo-font-heading);
-    font-size: 0.8rem;
-    font-weight: 500;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--halo-text-muted);
-  }
-
-  header button {
-    border: none;
-    background: none;
-    color: var(--halo-text-muted);
-    cursor: pointer;
-  }
-
   ul {
     margin: 0;
     padding: 0;
@@ -282,6 +250,16 @@
 
   li.disabled .name {
     text-decoration: line-through;
+  }
+
+  /* The feed this was opened from. Scrolling it into view puts it somewhere in
+     the middle of a list of near-identical rows, so it also has to say which
+     one it is. Same recipe as a selected row elsewhere. */
+  li.revealed {
+    margin: 0 calc(-1 * var(--halo-card-padding));
+    padding-left: var(--halo-card-padding);
+    padding-right: var(--halo-card-padding);
+    background: var(--halo-accent-soft);
   }
 
   .row {

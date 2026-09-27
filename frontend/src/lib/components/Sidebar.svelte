@@ -348,13 +348,16 @@
     gap: 0.5rem;
   }
 
+  /* The same weight as the label it sits beside. `--halo-text-light` is a
+     border-grade tone, not a text one, and on the light sidebar it reads as a
+     smudge — a control that looks like a rendering fault gets no clicks. */
   .heading button {
     display: grid;
     place-items: center;
     padding: 0;
     border: none;
     background: none;
-    color: var(--halo-text-light);
+    color: var(--halo-text-muted);
     cursor: pointer;
   }
 

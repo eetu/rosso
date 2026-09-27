@@ -22,7 +22,7 @@ pub struct Db {
 /// runner like bacon can restart mid-edit and advance the version before the
 /// matching DDL is written; re-running the whole batch makes that harmless.)
 /// It is read only for genuine one-shot data fixes.
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 impl Db {
     pub fn open(path: &Path) -> anyhow::Result<Self> {
@@ -58,6 +58,9 @@ impl Db {
 }
 
 fn migrate(conn: &Connection) -> anyhow::Result<()> {
+    // Read before anything writes it: this is the one input the one-shot
+    // fixes below key off.
+    let before: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     conn.execute_batch(SCHEMA)?;
 
     // `CREATE TABLE IF NOT EXISTS` does not alter a table that already exists,
@@ -134,6 +137,18 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
                 OR embed_error LIKE '%operation timed out%')",
         [],
     )?;
+
+    // Every icon stored before version 2 was chosen with the feed's own
+    // `<image>` ranked first — a channel logo, often a wide wordmark that
+    // draws as a dash at 14px. The ranking is fixed, but the bytes already
+    // stored are not, and nothing distinguishes a good icon from a banner in
+    // the row. So they are all fetched again, once: one request per feed.
+    //
+    // Gated on the version because it is the one fix here that is not
+    // idempotent by shape — a refetched icon looks exactly like a stale one.
+    if before < 2 {
+        conn.execute("UPDATE feeds SET icon = NULL, icon_attempts = 0", [])?;
+    }
 
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     Ok(())

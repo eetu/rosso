@@ -101,13 +101,18 @@ pub async fn fetch_icon(
     let site = Url::parse(site_url)?;
     let mut candidates: Vec<Url> = Vec::new();
 
-    // What the feed itself declared comes first — the publisher named it, so it
-    // beats anything guessed from the page — then what the page declares, then
-    // the path every browser tries anyway.
-    candidates.extend(declared.and_then(|d| site.join(d).ok()));
+    // What the page declares as its icon comes first, then what the feed
+    // declared, then the path every browser tries anyway.
+    //
+    // The feed's own image is last-but-one on purpose. RSS `<image>` is a
+    // channel *logo*, and publishers ship their wordmark there: the Guardian's
+    // is `guardian-logo-rss.png`, a wide banner that rendered in the sidebar as
+    // a thin dash. The page's `<link rel=icon>` is the thing actually meant to
+    // be drawn at 14px.
     if let Ok(html) = get_text(http, site.as_str(), allow_private).await {
         candidates.extend(icon_links(&html).iter().filter_map(|h| site.join(h).ok()));
     }
+    candidates.extend(declared.and_then(|d| site.join(d).ok()));
     if let Ok(fallback) = site.join("/favicon.ico") {
         candidates.push(fallback);
     }
@@ -146,6 +151,7 @@ async fn download(http: &Client, url: &str, allow_private: bool) -> anyhow::Resu
 
     let bytes = read_capped(res, MAX_ICON_BYTES).await?;
     anyhow::ensure!(!bytes.is_empty(), "empty icon");
+    anyhow::ensure!(!is_banner(&bytes), "a banner, not an icon");
     Ok(format!(
         "data:{mime};base64,{}",
         base64::engine::general_purpose::STANDARD.encode(&bytes)
@@ -164,4 +170,56 @@ async fn get_text(http: &Client, url: &str, allow_private: bool) -> anyhow::Resu
         .error_for_status()?;
     let bytes = read_capped(res, MAX_PAGE_BYTES).await?;
     Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// Is this PNG a wordmark rather than an icon?
+///
+/// An icon is drawn in a 14px square, and anything much wider than tall turns
+/// into a line there. The width and height sit at fixed offsets in the PNG
+/// header, so this costs eight bytes and no decoder — which is why only PNG is
+/// checked. It is what publishers ship their logos as; an ICO or SVG of the
+/// wrong shape is rare enough to leave to `object-fit`.
+fn is_banner(bytes: &[u8]) -> bool {
+    const SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
+    // Signature, then IHDR: length (4), type (4), width (4), height (4).
+    if bytes.len() < 24 || !bytes.starts_with(SIGNATURE) || &bytes[12..16] != b"IHDR" {
+        return false;
+    }
+    let width = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
+    let height = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
+    if width == 0 || height == 0 {
+        return false;
+    }
+    let (long, short) = (width.max(height), width.min(height));
+    long > short.saturating_mul(3) / 2
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn png(width: u32, height: u32) -> Vec<u8> {
+        let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+        out.extend_from_slice(&13u32.to_be_bytes());
+        out.extend_from_slice(b"IHDR");
+        out.extend_from_slice(&width.to_be_bytes());
+        out.extend_from_slice(&height.to_be_bytes());
+        out
+    }
+
+    #[test]
+    fn a_wordmark_is_refused_and_a_square_icon_is_not() {
+        // The shape of the Guardian's feed logo, which at 14px is a dash.
+        assert!(is_banner(&png(400, 64)));
+        assert!(!is_banner(&png(180, 180)));
+        // A little off-square is still an icon.
+        assert!(!is_banner(&png(64, 56)));
+    }
+
+    #[test]
+    fn anything_that_is_not_a_png_is_left_alone() {
+        assert!(!is_banner(b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>"));
+        assert!(!is_banner(&[0, 0, 1, 0]));
+        assert!(!is_banner(b""));
+    }
 }

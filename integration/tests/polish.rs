@@ -322,3 +322,122 @@ async fn pruning_keeps_what_the_reader_still_wants() {
         1
     );
 }
+
+/// A PNG header of the given size — enough for the banner check, which reads
+/// nothing past the IHDR dimensions.
+fn png(width: u32, height: u32) -> Vec<u8> {
+    let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+    out.extend_from_slice(&13u32.to_be_bytes());
+    out.extend_from_slice(b"IHDR");
+    out.extend_from_slice(&width.to_be_bytes());
+    out.extend_from_slice(&height.to_be_bytes());
+    out
+}
+
+#[tokio::test]
+#[ignore = "spawns the backend binary"]
+async fn the_page_icon_beats_the_logo_a_feed_declares() {
+    // The Guardian's shape: the feed's `<image>` is its wordmark, which drew as
+    // a thin dash at 14px, while the page links a proper square icon.
+    let server = MockServer::start().await;
+    let base = server.uri();
+    let feed = format!(
+        "<?xml version=\"1.0\"?><rss version=\"2.0\"><channel>\
+         <title>Paper</title><link>{base}/</link>\
+         <image><url>{base}/logo.png</url><title>Paper</title><link>{base}/</link></image>\
+         <item><title>A</title><link>{base}/a</link><guid>a</guid>\
+         <description>{BODY} {BODY}</description></item></channel></rss>"
+    );
+    Mock::given(method("GET"))
+        .and(path("/feed.xml"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(feed, "application/rss+xml"))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            "<html><head><link rel=\"apple-touch-icon\" href=\"/square.png\"></head></html>",
+            "text/html",
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/square.png"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(png(180, 180), "image/png"))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/logo.png"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(png(400, 64), "image/png"))
+        .mount(&server)
+        .await;
+
+    let stack = Stack::start().await.unwrap();
+    stack
+        .post_json("/api/feeds", json!({ "url": base.clone() + "/feed.xml" }))
+        .await;
+
+    let feeds = wait_for(&stack, "/api/feeds", |b| b["feeds"][0]["icon"].is_string()).await;
+    let icon = feeds["feeds"][0]["icon"].as_str().unwrap();
+    let stored = base64_decode(icon.trim_start_matches("data:image/png;base64,"));
+    assert_eq!(stored, png(180, 180), "the wide logo was stored instead");
+}
+
+#[tokio::test]
+#[ignore = "spawns the backend binary"]
+async fn a_banner_is_refused_even_when_it_is_all_there_is() {
+    // No page icon at all, only the feed's wordmark. A dash in the sidebar is
+    // worse than no icon, so the feed goes without.
+    let server = MockServer::start().await;
+    let base = server.uri();
+    let feed = format!(
+        "<?xml version=\"1.0\"?><rss version=\"2.0\"><channel>\
+         <title>Paper</title><link>{base}/</link>\
+         <image><url>{base}/logo.png</url><title>Paper</title><link>{base}/</link></image>\
+         <item><title>A</title><link>{base}/a</link><guid>a</guid>\
+         <description>{BODY} {BODY}</description></item></channel></rss>"
+    );
+    Mock::given(method("GET"))
+        .and(path("/feed.xml"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(feed, "application/rss+xml"))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/logo.png"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(png(400, 64), "image/png"))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+
+    let stack = Stack::start().await.unwrap();
+    stack
+        .post_json("/api/feeds", json!({ "url": base + "/feed.xml" }))
+        .await;
+
+    tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+    assert!(
+        stack.get_json("/api/feeds").await["feeds"][0]["icon"].is_null(),
+        "a banner was stored as an icon"
+    );
+}
+
+/// Standard base64, decoded without pulling a crate into the test harness.
+fn base64_decode(input: &str) -> Vec<u8> {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = Vec::new();
+    let (mut buf, mut bits) = (0u32, 0);
+    for c in input.bytes().filter(|&c| c != b'=') {
+        let v = ALPHABET.iter().position(|&a| a == c).expect("base64") as u32;
+        buf = (buf << 6) | v;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((buf >> bits) as u8);
+            buf &= (1 << bits) - 1;
+        }
+    }
+    out
+}

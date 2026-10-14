@@ -44,7 +44,7 @@ mime_guess = "2.0.5"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 
 # Feed domain
-feed-rs = "2.4.0"
+feed-rs = "3.0.0"
 quick-xml = "0.42.0"
 ammonia = "4.1.4"
 dom_smoothie = "0.18.1"

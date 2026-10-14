@@ -2262,7 +2262,7 @@ __metadata:
     eslint: "npm:^10.11.0"
     prettier: "npm:^3.9.9"
     prettier-plugin-svelte: "npm:^4.0.1"
-    svelte: "npm:^5.57.1"
+    svelte: "npm:^5.57.2"
     svelte-check: "npm:^4.6.0"
     typescript: "npm:^6.0.3"
     typescript-eslint: "npm:^8.71.0"
@@ -2383,9 +2383,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"svelte@npm:^5.57.1":
-  version: 5.57.1
-  resolution: "svelte@npm:5.57.1"
+"svelte@npm:^5.57.2":
+  version: 5.57.2
+  resolution: "svelte@npm:5.57.2"
   dependencies:
     "@jridgewell/remapping": "npm:^2.3.5"
     "@jridgewell/sourcemap-codec": "npm:^1.6.0"
@@ -2402,7 +2402,7 @@ __metadata:
     locate-character: "npm:^3.0.0"
     magic-string: "npm:^0.30.11"
     zimmerframe: "npm:^1.1.2"
-  checksum: 10c0/a605b33f371a6c49f07b26dfc4017ae358a06e3b1dc3c8bb051daabb635d0f9ca08a183ea750ac2af298ba4a535995c0395443d555f1c73c9c666e8253dd8624
+  checksum: 10c0/cd23b075a56c664fb0c2cae5e21651028c2f85a6c89f8771bcd983134d69c87a2dd6fe45f0c0cdfbce4aa3cc791d098cebce8b576a98bed9434a4ada2e6e6c15
   languageName: node
   linkType: hard
 

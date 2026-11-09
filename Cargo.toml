@@ -47,7 +47,7 @@ rusqlite = { version = "0.41.0", features = ["bundled"] }
 feed-rs = "3.0.0"
 quick-xml = "0.42.0"
 ammonia = "4.1.4"
-dom_smoothie = "0.18.1"
+dom_smoothie = "0.19.0"
 
 [workspace.dependencies.tempfile]
 version = "3.27.0"
